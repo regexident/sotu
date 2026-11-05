@@ -17,9 +17,14 @@ mod outcome;
 
 pub use node::{StateOrSuperstate, SubmachineNode};
 pub use outcome::Outcome;
+#[cfg(feature = "macros")]
+pub use sotu_macros::Event;
 
 /// Common imports for writing state machines.
 pub mod prelude {
     pub use crate::node::{StateOrSuperstate, SubmachineNode};
     pub use crate::outcome::Outcome::{self, *};
+
+    #[cfg(feature = "macros")]
+    pub use sotu_macros::Event;
 }
