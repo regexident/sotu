@@ -1,0 +1,6 @@
+error: event variants can not hold a bare type parameter
+ --> /tests/expand-tests/event/fail/bare_type_parameter.rs:5:11
+  |
+5 |     Value(T),
+  |           ^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

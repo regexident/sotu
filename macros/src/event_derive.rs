@@ -4,7 +4,7 @@ use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Data, DeriveInput, Fields, GenericParam, Generics, Ident, Type, Variant, WhereClause,
+    Data, DeriveInput, Fields, GenericParam, Generics, Ident, Type, TypePath, Variant, WhereClause,
     parse_quote,
 };
 
@@ -12,8 +12,9 @@ use syn::{
 
 /// Expand `#[derive(Event)]` for `input`.
 ///
-/// Fails if `input` is not an enum or if a variant does not hold exactly one
-/// unnamed field.
+/// Fails if `input` is not an enum, if a variant does not hold exactly one
+/// unnamed field, if two variants hold the same type, or if a variant holds a
+/// bare type parameter of the enum.
 pub fn expand(input: DeriveInput) -> syn::Result<TokenStream> {
     let variants = collect_variants(&input)?;
     let mut output = TokenStream::new();
@@ -36,6 +37,7 @@ struct EventVariant<'a> {
     payload: &'a Type,
 }
 
+/// Validate `input` and collect its variants.
 fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<EventVariant<'_>>> {
     let data = match &input.data {
         Data::Enum(data) => data,
@@ -47,7 +49,11 @@ fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<EventVariant<'_>>> {
     let mut seen_payloads = HashSet::new();
 
     for variant in &data.variants {
-        variants.push(collect_variant(variant, &mut seen_payloads)?);
+        variants.push(collect_variant(
+            &input.generics,
+            variant,
+            &mut seen_payloads,
+        )?);
     }
 
     Ok(variants)
@@ -58,10 +64,21 @@ fn not_an_enum(keyword: &impl ToTokens) -> syn::Error {
 }
 
 fn collect_variant<'a>(
+    generics: &Generics,
     variant: &'a Variant,
     seen_payloads: &mut HashSet<String>,
 ) -> syn::Result<EventVariant<'a>> {
     let payload = single_unnamed_field(variant)?;
+
+    // A bare type parameter can be instantiated with the type of any other
+    // variant, which would make the generated impls overlap in a way the
+    // duplicate check below can not see.
+    if is_type_parameter(payload, generics) {
+        return Err(syn::Error::new_spanned(
+            payload,
+            "event variants can not hold a bare type parameter",
+        ));
+    }
 
     // Aliases are not resolved here: two paths to one type are caught by the
     // compiler as conflicting implementations of the expanded impls.
@@ -91,6 +108,15 @@ fn single_unnamed_field(variant: &Variant) -> syn::Result<&Type> {
         variant,
         "event variants must hold exactly one unnamed field, as in `Variant(Payload)`",
     ))
+}
+
+fn is_type_parameter(payload: &Type, generics: &Generics) -> bool {
+    let Type::Path(TypePath { qself: None, path }) = payload else {
+        return false;
+    };
+
+    path.get_ident()
+        .is_some_and(|ident| generics.type_params().any(|param| param.ident == *ident))
 }
 
 /// Identify a type by its tokens, ignoring whitespace.

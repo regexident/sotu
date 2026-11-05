@@ -8,12 +8,13 @@ mod event_derive;
 /// Derive the `From`, `Variant` and `SubEvent` implementations of an event enum.
 ///
 /// Every variant of the enum must be a tuple variant holding exactly one
-/// value. For each variant `V(T)` the derive implements [`From<T>`] and
-/// `sotu::event::Variant<T>` for the enum. It also implements
-/// `sotu::event::SubEvent<P>` for every parent event `P` that implements
-/// `Variant<T>` for all of the enum's variant types, which makes the enum a
-/// child event of any such parent. An enum without variants is a child event
-/// of every parent and accepts none of their events.
+/// value, and no two variants may hold the same type. For each variant
+/// `V(T)` the derive implements [`From<T>`] and `sotu::event::Variant<T>`
+/// for the enum. It also implements `sotu::event::SubEvent<P>` for every
+/// parent event `P` that implements `Variant<T>` for all of the enum's variant
+/// types, which makes the enum a child event of any such parent. An enum
+/// without variants is a child event of every parent and accepts none of
+/// their events.
 ///
 /// # Examples
 ///
