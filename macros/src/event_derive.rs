@@ -2,7 +2,8 @@ use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
 use syn::{
-    Data, DeriveInput, Fields, GenericParam, Generics, Ident, Type, WhereClause, parse_quote,
+    Data, DeriveInput, Fields, GenericParam, Generics, Ident, Type, Variant, WhereClause,
+    parse_quote,
 };
 
 // MARK: Expansion
@@ -34,39 +35,47 @@ struct EventVariant<'a> {
 }
 
 fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<EventVariant<'_>>> {
-    let Data::Enum(data) = &input.data else {
-        return Err(syn::Error::new_spanned(
-            &input.ident,
-            "`Event` can only be derived for enums",
-        ));
+    let data = match &input.data {
+        Data::Enum(data) => data,
+        Data::Struct(data) => return Err(not_an_enum(&data.struct_token)),
+        Data::Union(data) => return Err(not_an_enum(&data.union_token)),
     };
 
     let mut variants = Vec::with_capacity(data.variants.len());
 
     for variant in &data.variants {
-        let Fields::Unnamed(fields) = &variant.fields else {
-            return Err(syn::Error::new_spanned(
-                variant,
-                "event variants must hold exactly one unnamed field, as in `Variant(Payload)`",
-            ));
-        };
-
-        let mut fields = fields.unnamed.iter();
-
-        let (Some(field), None) = (fields.next(), fields.next()) else {
-            return Err(syn::Error::new_spanned(
-                variant,
-                "event variants must hold exactly one unnamed field, as in `Variant(Payload)`",
-            ));
-        };
-
-        variants.push(EventVariant {
-            name: &variant.ident,
-            payload: &field.ty,
-        });
+        variants.push(collect_variant(variant)?);
     }
 
     Ok(variants)
+}
+
+fn not_an_enum(keyword: &impl ToTokens) -> syn::Error {
+    syn::Error::new_spanned(keyword, "`Event` can only be derived for enums")
+}
+
+fn collect_variant(variant: &Variant) -> syn::Result<EventVariant<'_>> {
+    let payload = single_unnamed_field(variant)?;
+
+    Ok(EventVariant {
+        name: &variant.ident,
+        payload,
+    })
+}
+
+fn single_unnamed_field(variant: &Variant) -> syn::Result<&Type> {
+    if let Fields::Unnamed(fields) = &variant.fields {
+        let mut fields = fields.unnamed.iter();
+
+        if let (Some(field), None) = (fields.next(), fields.next()) {
+            return Ok(&field.ty);
+        }
+    }
+
+    Err(syn::Error::new_spanned(
+        variant,
+        "event variants must hold exactly one unnamed field, as in `Variant(Payload)`",
+    ))
 }
 
 // MARK: From
