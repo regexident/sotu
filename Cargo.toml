@@ -1,7 +1,15 @@
+[workspace]
+
 [package]
 name = "sotu"
+description = "Composable hierarchical state machines"
 license = "MIT OR Apache-2.0"
 edition = "2024"
+rust-version = "1.85"
 version = "0.1.0"
 
 [dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+test-strategy = "0.4.5"
