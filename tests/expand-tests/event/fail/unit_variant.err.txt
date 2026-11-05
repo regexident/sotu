@@ -1,0 +1,6 @@
+error: event variants must hold exactly one unnamed field, as in `Variant(Payload)`
+ --> /tests/expand-tests/event/fail/unit_variant.rs:5:5
+  |
+5 |     Tick,
+  |     ^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
