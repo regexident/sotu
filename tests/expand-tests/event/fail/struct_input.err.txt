@@ -1,6 +1,6 @@
 error: `Event` can only be derived for enums
- --> /tests/expand-tests/event/fail/struct_input.rs:6:8
+ --> /tests/expand-tests/event/fail/struct_input.rs:6:1
   |
 6 | struct Event(Tick);
-  |        ^^^^^
+  | ^^^^^^
 error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
