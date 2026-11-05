@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use proc_macro2::{Span, TokenStream, TokenTree};
 use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
@@ -42,9 +44,10 @@ fn collect_variants(input: &DeriveInput) -> syn::Result<Vec<EventVariant<'_>>> {
     };
 
     let mut variants = Vec::with_capacity(data.variants.len());
+    let mut seen_payloads = HashSet::new();
 
     for variant in &data.variants {
-        variants.push(collect_variant(variant)?);
+        variants.push(collect_variant(variant, &mut seen_payloads)?);
     }
 
     Ok(variants)
@@ -54,8 +57,20 @@ fn not_an_enum(keyword: &impl ToTokens) -> syn::Error {
     syn::Error::new_spanned(keyword, "`Event` can only be derived for enums")
 }
 
-fn collect_variant(variant: &Variant) -> syn::Result<EventVariant<'_>> {
+fn collect_variant<'a>(
+    variant: &'a Variant,
+    seen_payloads: &mut HashSet<String>,
+) -> syn::Result<EventVariant<'a>> {
     let payload = single_unnamed_field(variant)?;
+
+    // Aliases are not resolved here: two paths to one type are caught by the
+    // compiler as conflicting implementations of the expanded impls.
+    if !seen_payloads.insert(type_key(payload)) {
+        return Err(syn::Error::new_spanned(
+            payload,
+            format!("duplicate event type `{}`", type_display(payload)),
+        ));
+    }
 
     Ok(EventVariant {
         name: &variant.ident,
@@ -76,6 +91,31 @@ fn single_unnamed_field(variant: &Variant) -> syn::Result<&Type> {
         variant,
         "event variants must hold exactly one unnamed field, as in `Variant(Payload)`",
     ))
+}
+
+/// Identify a type by its tokens, ignoring whitespace.
+fn type_key(payload: &Type) -> String {
+    let mut key = payload.to_token_stream().to_string();
+
+    key.retain(|character| !character.is_whitespace());
+
+    key
+}
+
+/// Render `ty` the way it is written in source code.
+///
+/// Token streams print a space between every pair of tokens, as in
+/// `Vec < u8 >`. Removing the spaces around the punctuation that is written
+/// tight in practice keeps the diagnostics readable.
+fn type_display(ty: &Type) -> String {
+    ty.to_token_stream()
+        .to_string()
+        .replace(" :: ", "::")
+        .replace(" < ", "<")
+        .replace("< ", "<")
+        .replace(" >", ">")
+        .replace("& ", "&")
+        .replace(" ,", ",")
 }
 
 // MARK: From
@@ -290,6 +330,32 @@ fn collect_idents(tokens: TokenStream, idents: &mut Vec<String>) {
             TokenTree::Ident(ident) => idents.push(ident.to_string()),
             TokenTree::Group(group) => collect_idents(group.stream(), idents),
             TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+// MARK: Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn type_display_renders_types_as_written() {
+        let cases: [(Type, &str); 6] = [
+            (parse_quote!(Tick), "Tick"),
+            (parse_quote!(common::Tick), "common::Tick"),
+            (parse_quote!(Vec<u8>), "Vec<u8>"),
+            (parse_quote!(&'a str), "&'a str"),
+            (parse_quote!((u8, u16)), "(u8, u16)"),
+            (
+                parse_quote!(Result<Vec<u8>, &'a mut str>),
+                "Result<Vec<u8>, &'a mut str>",
+            ),
+        ];
+
+        for (payload, expected) in cases {
+            assert_eq!(type_display(&payload), expected);
         }
     }
 }
