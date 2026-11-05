@@ -40,7 +40,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
-          # update `cargo-expand` accordingly, when bumping MSRV:
+          # The `tryexpand` snapshots are recorded with the toolchain pinned in
+          # `rust-toolchain.toml`, which also pins the compiler used here:
+          # update `cargo-expand` accordingly, when bumping that pin:
           toolchain: 1.91.0
           components: rust-src
       - uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
