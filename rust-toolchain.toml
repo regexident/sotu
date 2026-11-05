@@ -1,0 +1,8 @@
+# Pinned to the MSRV so that the `tryexpand` snapshots (`tests/expand-tests`)
+# are compared against the diagnostics and expansions of a single compiler
+# version. Update this together with `rust-version` in `Cargo.toml`,
+# `Cargo.toml`'s `tryexpand` dependency and re-record the snapshots with
+# `TRYEXPAND=overwrite cargo test`.
+[toolchain]
+channel = "1.91.0"
+components = ["rust-src"]
