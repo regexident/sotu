@@ -2,5 +2,14 @@
 name = "sotu"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+description = "Composable hierarchical state machines"
+
+[workspace]
 
 [dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+test-strategy = "0.4.5"
