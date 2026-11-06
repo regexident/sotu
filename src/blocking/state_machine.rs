@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use core::ops::Deref;
 
 use super::IntoStateMachine;
@@ -93,6 +94,43 @@ impl<M: IntoStateMachine> Deref for UninitializedStateMachine<M> {
     fn deref(&self) -> &M {
         &self.inner.shared_storage
     }
+}
+
+impl<M> Debug for UninitializedStateMachine<M>
+where
+    M: IntoStateMachine + Debug,
+    M::State: Debug,
+    M::Exit: Debug,
+{
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UninitializedStateMachine")
+            .field("shared_storage", &self.inner.shared_storage)
+            .field("state", &self.inner.state)
+            .field("exit", &self.inner.exit)
+            .finish()
+    }
+}
+
+impl<M> PartialEq for UninitializedStateMachine<M>
+where
+    M: IntoStateMachine + PartialEq,
+    M::State: PartialEq,
+    M::Exit: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.shared_storage == other.inner.shared_storage
+            && self.inner.state == other.inner.state
+            && self.inner.exit == other.inner.exit
+    }
+}
+
+impl<M> Eq for UninitializedStateMachine<M>
+where
+    M: IntoStateMachine + Eq,
+    M::State: Eq,
+    M::Exit: Eq,
+{
 }
 
 // MARK: Initialized Machine
@@ -254,6 +292,43 @@ impl<M: IntoStateMachine> Deref for InitializedStateMachine<M> {
     fn deref(&self) -> &M {
         &self.inner.shared_storage
     }
+}
+
+impl<M> Debug for InitializedStateMachine<M>
+where
+    M: IntoStateMachine + Debug,
+    M::State: Debug,
+    M::Exit: Debug,
+{
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InitializedStateMachine")
+            .field("shared_storage", &self.inner.shared_storage)
+            .field("state", &self.inner.state)
+            .field("exit", &self.inner.exit)
+            .finish()
+    }
+}
+
+impl<M> PartialEq for InitializedStateMachine<M>
+where
+    M: IntoStateMachine + PartialEq,
+    M::State: PartialEq,
+    M::Exit: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.shared_storage == other.inner.shared_storage
+            && self.inner.state == other.inner.state
+            && self.inner.exit == other.inner.exit
+    }
+}
+
+impl<M> Eq for InitializedStateMachine<M>
+where
+    M: IntoStateMachine + Eq,
+    M::State: Eq,
+    M::Exit: Eq,
+{
 }
 
 // MARK: Lazily Initialized Machine
@@ -473,4 +548,43 @@ impl<M: IntoStateMachine + Default> Default for StateMachine<M> {
     fn default() -> Self {
         M::default().state_machine()
     }
+}
+
+impl<M> Debug for StateMachine<M>
+where
+    M: IntoStateMachine + Debug,
+    M::State: Debug,
+    M::Exit: Debug,
+{
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StateMachine")
+            .field("shared_storage", &self.inner.shared_storage)
+            .field("state", &self.inner.state)
+            .field("exit", &self.inner.exit)
+            .field("initialized", &self.initialized)
+            .finish()
+    }
+}
+
+impl<M> PartialEq for StateMachine<M>
+where
+    M: IntoStateMachine + PartialEq,
+    M::State: PartialEq,
+    M::Exit: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.inner.shared_storage == other.inner.shared_storage
+            && self.inner.state == other.inner.state
+            && self.inner.exit == other.inner.exit
+            && self.initialized == other.initialized
+    }
+}
+
+impl<M> Eq for StateMachine<M>
+where
+    M: IntoStateMachine + Eq,
+    M::State: Eq,
+    M::Exit: Eq,
+{
 }
