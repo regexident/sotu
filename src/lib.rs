@@ -27,7 +27,8 @@ pub use sotu_macros::Event;
 /// Common imports for writing state machines.
 pub mod prelude {
     pub use crate::blocking::{
-        InitializedStateMachine, IntoStateMachine, State, Superstate, UninitializedStateMachine,
+        InitializedStateMachine, IntoStateMachine, State, StateMachine, Superstate,
+        UninitializedStateMachine,
     };
     pub use crate::blocking::{IntoStateMachineExt as _, StateExt as _, SuperstateExt as _};
     pub use crate::node::{StateOrSuperstate, SubmachineNode};

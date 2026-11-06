@@ -8,6 +8,8 @@
 //! [`IntoStateMachineExt::uninitialized_state_machine`] wraps the shared storage
 //! in an [`UninitializedStateMachine`], and its `init` method returns the
 //! [`InitializedStateMachine`] that handles events.
+//! [`IntoStateMachineExt::state_machine`] wraps it in a [`StateMachine`] instead,
+//! which initializes itself on first use.
 
 mod ext;
 mod hook;
@@ -21,5 +23,7 @@ pub use ext::{StateExt, SuperstateExt};
 pub use hook::{DispatchHook, TransitionHook};
 pub use into_state_machine::IntoStateMachine;
 pub use state::State;
-pub use state_machine::{InitializedStateMachine, IntoStateMachineExt, UninitializedStateMachine};
+pub use state_machine::{
+    InitializedStateMachine, IntoStateMachineExt, StateMachine, UninitializedStateMachine,
+};
 pub use superstate::Superstate;
