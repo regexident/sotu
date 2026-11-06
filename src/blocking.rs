@@ -5,10 +5,12 @@
 //! superstates implement [`Superstate`]. Handlers run to completion on the
 //! calling thread and never suspend.
 
+mod hook;
 mod into_state_machine;
 mod state;
 mod superstate;
 
+pub use hook::DispatchHook;
 pub use into_state_machine::IntoStateMachine;
 pub use state::State;
 pub use superstate::Superstate;

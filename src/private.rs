@@ -4,6 +4,14 @@
 
 use crate::Outcome;
 
+/// Marker selecting the hook adapters for functions that take a trailing
+/// context parameter.
+pub struct WithContext;
+
+/// Marker selecting the hook adapters for functions that take no context
+/// parameter.
+pub struct WithoutContext;
+
 /// The result of dispatching an event to a single node.
 ///
 /// Extends [`Outcome`] with the offsets that mounted child machines need to
