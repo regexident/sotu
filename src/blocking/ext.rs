@@ -1,3 +1,8 @@
+use core::ops::ControlFlow;
+
+use crate::private::{Dispatched, NodeOutcome};
+use crate::{Outcome, StateOrSuperstate};
+
 use super::{IntoStateMachine, State, Superstate};
 
 crate::hierarchy::hierarchy_algorithms!();
@@ -63,6 +68,35 @@ pub trait StateExt<M: IntoStateMachine>: State<M> {
         context: &mut M::Context<'ctx, 'data>,
         levels: usize,
     );
+
+    /// Dispatch `event` along the active path, starting at this state.
+    ///
+    /// The event goes to this state and then up the chain of superstates for
+    /// as long as nodes return [`Outcome::Super`]. The root's
+    /// [`before_dispatch`](IntoStateMachine::before_dispatch) and
+    /// [`after_dispatch`](IntoStateMachine::after_dispatch) hooks surround every
+    /// dispatched node, in that order, and `after_dispatch` receives the event
+    /// the node handed back.
+    ///
+    /// Returns the first outcome other than [`Outcome::Super`] together with
+    /// the depth of the node that decided it, so [`Outcome::Super`] is never
+    /// returned. An [`Outcome::ExternalTransition`] reports the depth of the
+    /// node that handles it, which may lie above the node that returned it. A
+    /// `Super` past the top-level node drops the event, which counts as handled
+    /// and returns `(Outcome::Handled, 0)`.
+    ///
+    /// A node that reports the event as not addressed to it is skipped without
+    /// hooks or handler, and the event continues upward. A node at depth `d`
+    /// that defers `mount_offset` levels up skips every node deeper than
+    /// `d - mount_offset` without hooks, and dispatch continues normally at
+    /// that depth. An offset of `d` or more skips every remaining node and
+    /// returns `(Outcome::Handled, 0)`.
+    fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> (Outcome<M::State, M::Exit>, usize);
 }
 
 impl<M, S> StateExt<M> for S
@@ -133,6 +167,136 @@ where
             self.exit_level(shared_storage, context, level);
         }
     }
+
+    fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> (Outcome<M::State, M::Exit>, usize) {
+        let depth = state_depth::<M>(self);
+        let (is_addressed, event) = self.__is_addressed(event);
+
+        let (event, skip_to) = if is_addressed {
+            shared_storage.before_dispatch(StateOrSuperstate::State(&*self), &event, context);
+
+            let Dispatched { outcome, event } = self.__dispatch(shared_storage, event, context);
+
+            shared_storage.after_dispatch(StateOrSuperstate::State(&*self), &event, context);
+
+            match resolve_node_outcome::<M>(outcome, depth) {
+                ControlFlow::Break(decision) => return decision,
+                ControlFlow::Continue(skip_to) => (event, skip_to),
+            }
+        } else {
+            (event, None)
+        };
+
+        match self.superstate() {
+            Some(mut superstate) => dispatch_superstate::<M>(
+                &mut superstate,
+                shared_storage,
+                event,
+                context,
+                depth - 1,
+                skip_to,
+            ),
+            None => (Outcome::Handled, 0),
+        }
+    }
+}
+
+/// The deciding outcome of a dispatch and the depth of the node that decided it.
+type Decision<M> = (
+    Outcome<<M as IntoStateMachine>::State, <M as IntoStateMachine>::Exit>,
+    usize,
+);
+
+/// Decide how dispatch proceeds after the node at `depth` returned `outcome`.
+///
+/// Breaks with the result of the dispatch, or continues with the depth at which
+/// dispatch resumes above this node, where `None` names the parent.
+fn resolve_node_outcome<M: IntoStateMachine>(
+    outcome: NodeOutcome<M::State, M::Exit>,
+    depth: usize,
+) -> ControlFlow<Decision<M>, Option<usize>> {
+    match outcome {
+        NodeOutcome::Handled => ControlFlow::Break((Outcome::Handled, depth)),
+        NodeOutcome::Super => ControlFlow::Continue(None),
+        NodeOutcome::Transition(target) => ControlFlow::Break((Outcome::Transition(target), depth)),
+        // An offset beyond the top names no handling node, which depth `0`
+        // expresses to the transition path computations.
+        NodeOutcome::ExternalTransition {
+            target,
+            handler_offset,
+        } => ControlFlow::Break((
+            Outcome::ExternalTransition(target),
+            depth.saturating_sub(handler_offset),
+        )),
+        NodeOutcome::Exit(exit) => ControlFlow::Break((Outcome::Exit(exit), depth)),
+        NodeOutcome::DeferToMount { mount_offset } if mount_offset >= depth => {
+            ControlFlow::Break((Outcome::Handled, 0))
+        }
+        NodeOutcome::DeferToMount { mount_offset } => {
+            ControlFlow::Continue(Some(depth - mount_offset))
+        }
+    }
+}
+
+/// Dispatch `event` to `superstate` at `depth` and then up its chain.
+///
+/// Nodes deeper than `skip_to` run neither hooks nor handlers. Each recursive
+/// step borrows the parent from the node below it, so that node stays available
+/// to its hooks and at most one borrow of the chain is live at each level.
+fn dispatch_superstate<'ctx, 'data: 'ctx, M: IntoStateMachine>(
+    superstate: &mut M::Superstate<'_>,
+    shared_storage: &mut M,
+    event: M::Event,
+    context: &mut M::Context<'ctx, 'data>,
+    depth: usize,
+    skip_to: Option<usize>,
+) -> Decision<M> {
+    let (event, skip_to) = if skip_to.is_some_and(|resume_depth| depth > resume_depth) {
+        (event, skip_to)
+    } else {
+        let (is_addressed, event) = superstate.__is_addressed(event);
+
+        if is_addressed {
+            shared_storage.before_dispatch(
+                StateOrSuperstate::Superstate(&*superstate),
+                &event,
+                context,
+            );
+
+            let Dispatched { outcome, event } =
+                superstate.__dispatch(shared_storage, event, context);
+
+            shared_storage.after_dispatch(
+                StateOrSuperstate::Superstate(&*superstate),
+                &event,
+                context,
+            );
+
+            match resolve_node_outcome::<M>(outcome, depth) {
+                ControlFlow::Break(decision) => return decision,
+                ControlFlow::Continue(skip_to) => (event, skip_to),
+            }
+        } else {
+            (event, None)
+        }
+    };
+
+    match superstate.superstate() {
+        Some(mut parent) => dispatch_superstate::<M>(
+            &mut parent,
+            shared_storage,
+            event,
+            context,
+            depth - 1,
+            skip_to,
+        ),
+        None => (Outcome::Handled, 0),
+    }
 }
 
 /// Run the entry action of the superstate `level` levels above `superstate`.
@@ -170,6 +334,20 @@ pub trait SuperstateExt<M: IntoStateMachine>: Superstate<M> {
     /// Return the depth of this superstate, where a top-level superstate has
     /// depth 1.
     fn depth(&mut self) -> usize;
+
+    /// Dispatch `event` along the active path, starting at this superstate.
+    ///
+    /// Follows the rules of [`StateExt::handle`], with depths computed from
+    /// this superstate: the first outcome other than [`Outcome::Super`] is
+    /// returned with the depth of the node that decided it, and a `Super` past
+    /// the top-level node counts as handled and returns
+    /// `(Outcome::Handled, 0)`.
+    fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> (Outcome<M::State, M::Exit>, usize);
 }
 
 // The associated type `IntoStateMachine::Superstate<'sub>` can only be named
@@ -182,5 +360,16 @@ where
 {
     fn depth(&mut self) -> usize {
         superstate_depth::<M>(self)
+    }
+
+    fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> (Outcome<M::State, M::Exit>, usize) {
+        let depth = superstate_depth::<M>(self);
+
+        dispatch_superstate::<M>(self, shared_storage, event, context, depth, None)
     }
 }
