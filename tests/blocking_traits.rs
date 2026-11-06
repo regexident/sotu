@@ -1,8 +1,11 @@
+mod common;
+
 use core::convert::Infallible;
 
+use common::tree::{Input, Leaf, Node, Record, Tree, TreeState, TreeSuperstate};
 use sotu::Outcome;
 use sotu::blocking::{IntoStateMachine, State, Superstate};
-use sotu::private::NodeOutcome;
+use sotu::private::{Dispatched, NodeOutcome};
 
 // MARK: Probe Machine
 
@@ -47,6 +50,88 @@ fn unit_superstate_defers_and_matches_itself() {
     );
     assert!(<() as Superstate<Probe>>::same_state(&(), &()));
     assert!(<() as Superstate<Probe>>::superstate(&mut ()).is_none());
+}
+
+#[test]
+fn superstate_default_dispatch_calls_handler() {
+    let mut tree = Tree::default();
+
+    let dispatched = TreeSuperstate::A.__dispatch(&mut tree, Input::GoFromA(Leaf::C), &mut ());
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::Transition(TreeState::C),
+            event: Input::GoFromA(Leaf::C),
+        }
+    );
+    assert_eq!(tree.trace, vec![Record::Handler(Node::A)]);
+}
+
+// MARK: State Defaults
+
+#[test]
+fn same_state_compares_variants_only() {
+    assert!(TreeState::B1 { visits: 1 }.same_state(&TreeState::B1 { visits: 9 }));
+    assert!(!TreeState::B1 { visits: 0 }.same_state(&TreeState::B2 { visits: 0 }));
+}
+
+#[test]
+fn default_dispatch_calls_handler_and_returns_event() {
+    let mut tree = Tree::default();
+
+    let dispatched = TreeState::A1.__dispatch(&mut tree, Input::Go(Leaf::C), &mut ());
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::Transition(TreeState::C),
+            event: Input::Go(Leaf::C),
+        }
+    );
+    assert_eq!(tree.trace, vec![Record::Handler(Node::A1)]);
+}
+
+#[test]
+fn default_dispatch_maps_external_transition_with_zero_offset() {
+    let mut tree = Tree::default();
+
+    let dispatched = TreeState::C.__dispatch(&mut tree, Input::ExternalFromLeaf(Leaf::B2), &mut ());
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::ExternalTransition {
+                target: TreeState::B2 { visits: 0 },
+                handler_offset: 0,
+            },
+            event: Input::ExternalFromLeaf(Leaf::B2),
+        }
+    );
+}
+
+#[test]
+fn default_is_addressed_accepts_every_event() {
+    assert_eq!(
+        TreeState::C.__is_addressed(Input::Finish),
+        (true, Input::Finish)
+    );
+}
+
+#[test]
+fn default_internal_transition_hooks_do_nothing() {
+    let mut tree = Tree::default();
+    let mut source = TreeState::A1;
+    let mut target = TreeState::C;
+
+    assert_eq!(source.__internal_transition_nesting(&mut target, 1), 0);
+
+    source.__before_internal_transition(&mut target, 1, 1, &mut tree, &mut ());
+    source.__after_internal_transition(&mut target, 1, 1, &mut tree, &mut ());
+
+    assert!(tree.trace.is_empty());
+    assert_eq!(source, TreeState::A1);
+    assert_eq!(target, TreeState::C);
 }
 
 // MARK: Node Outcome
