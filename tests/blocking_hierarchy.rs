@@ -2,7 +2,9 @@ mod common;
 
 use std::iter::successors;
 
-use common::tree::{Leaf, Node, Tree, TreeState, depth_of, leaf_node, parent_of, state_for};
+use common::tree::{
+    Leaf, Node, Record, Tree, TreeState, depth_of, leaf_node, parent_of, state_for,
+};
 use proptest::{prop_assert_eq, prop_assume};
 use sotu::blocking::StateExt;
 use test_strategy::proptest;
@@ -110,6 +112,42 @@ fn external_transition_path_matches_reference(
 }
 
 // MARK: Level-wise Actions
+
+#[test]
+fn enter_runs_entry_actions_outermost_first() {
+    let mut tree = Tree::default();
+    let mut state = state_for(Leaf::B1);
+
+    state.enter(&mut tree, &mut (), 3);
+
+    assert_eq!(
+        tree.trace,
+        vec![
+            Record::Entry(Node::A),
+            Record::Entry(Node::B),
+            Record::Entry(Node::B1),
+        ]
+    );
+    assert_eq!(state, TreeState::B1 { visits: 2 });
+}
+
+#[test]
+fn exit_runs_exit_actions_innermost_first() {
+    let mut tree = Tree::default();
+    let mut state = TreeState::B2 { visits: 0 };
+
+    state.exit(&mut tree, &mut (), 3);
+
+    assert_eq!(
+        tree.trace,
+        vec![
+            Record::Exit(Node::B2),
+            Record::Exit(Node::B),
+            Record::Exit(Node::A),
+        ]
+    );
+    assert_eq!(state, TreeState::B2 { visits: 20 });
+}
 
 #[test]
 fn levels_beyond_depth_do_nothing() {
