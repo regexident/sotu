@@ -47,6 +47,22 @@ pub trait StateExt<M: IntoStateMachine>: State<M> {
         context: &mut M::Context<'ctx, 'data>,
         level: usize,
     );
+
+    /// Run the entry actions of the lowest `levels` levels, outermost first.
+    fn enter<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    );
+
+    /// Run the exit actions of the lowest `levels` levels, innermost first.
+    fn exit<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    );
 }
 
 impl<M, S> StateExt<M> for S
@@ -93,6 +109,28 @@ where
             self.call_exit_action(shared_storage, context);
         } else if let Some(mut superstate) = self.superstate() {
             exit_superstate_level::<M>(&mut superstate, shared_storage, context, level - 1);
+        }
+    }
+
+    fn enter<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) {
+        for level in (0..levels).rev() {
+            self.enter_level(shared_storage, context, level);
+        }
+    }
+
+    fn exit<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) {
+        for level in 0..levels {
+            self.exit_level(shared_storage, context, level);
         }
     }
 }
