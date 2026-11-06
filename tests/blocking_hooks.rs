@@ -1,7 +1,7 @@
 use core::convert::Infallible;
 
 use sotu::StateOrSuperstate;
-use sotu::blocking::{DispatchHook, IntoStateMachine, State};
+use sotu::blocking::{DispatchHook, IntoStateMachine, State, TransitionHook};
 use sotu::prelude::Outcome;
 
 // MARK: Probe Machine
@@ -53,6 +53,20 @@ fn count_with_context(
     *context += 1;
 }
 
+fn count_transition(counter: &mut Counter, _source: &CounterState, _target: &CounterState) {
+    counter.calls += 1;
+}
+
+fn count_transition_with_context(
+    counter: &mut Counter,
+    _source: &CounterState,
+    _target: &CounterState,
+    context: &mut u32,
+) {
+    counter.calls += 1;
+    *context += 1;
+}
+
 // MARK: Tests
 
 #[test]
@@ -82,6 +96,40 @@ fn dispatch_hook_with_context_receives_context() {
         &mut counter,
         StateOrSuperstate::State(&CounterState::Only),
         &(),
+        &mut context,
+    );
+
+    assert_eq!(counter.calls, 1);
+    assert_eq!(context, 6);
+}
+
+#[test]
+fn transition_hook_without_context_leaves_context_untouched() {
+    let mut counter = Counter { calls: 0 };
+    let mut context = 5;
+
+    TransitionHook::call_transition_hook(
+        &count_transition,
+        &mut counter,
+        &CounterState::Only,
+        &CounterState::Only,
+        &mut context,
+    );
+
+    assert_eq!(counter.calls, 1);
+    assert_eq!(context, 5);
+}
+
+#[test]
+fn transition_hook_with_context_receives_context() {
+    let mut counter = Counter { calls: 0 };
+    let mut context = 5;
+
+    TransitionHook::call_transition_hook(
+        &count_transition_with_context,
+        &mut counter,
+        &CounterState::Only,
+        &CounterState::Only,
         &mut context,
     );
 
