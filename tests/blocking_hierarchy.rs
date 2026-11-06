@@ -2,7 +2,7 @@ mod common;
 
 use std::iter::successors;
 
-use common::tree::{Leaf, Node, depth_of, leaf_node, parent_of, state_for};
+use common::tree::{Leaf, Node, Tree, TreeState, depth_of, leaf_node, parent_of, state_for};
 use proptest::{prop_assert_eq, prop_assume};
 use sotu::blocking::StateExt;
 use test_strategy::proptest;
@@ -107,4 +107,16 @@ fn external_transition_path_matches_reference(
         source_state.external_transition_path(&mut target_state, handler_depth),
         reference_external_transition_path(source, target, handler_level)
     );
+}
+
+// MARK: Level-wise Actions
+
+#[test]
+fn levels_beyond_depth_do_nothing() {
+    let mut tree = Tree::default();
+
+    TreeState::C.enter_level(&mut tree, &mut (), 1);
+    TreeState::C.exit_level(&mut tree, &mut (), 1);
+
+    assert!(tree.trace.is_empty());
 }

@@ -2,9 +2,11 @@ use super::{IntoStateMachine, State, Superstate};
 
 crate::hierarchy::hierarchy_algorithms!();
 
-/// Hierarchy queries for leaf states.
+/// Hierarchy queries and level-wise actions for leaf states.
 ///
-/// Implemented for every leaf state of every machine.
+/// Implemented for every leaf state of every machine. Levels count from the
+/// leaf: level `0` is the state itself and level `k` is the `k`-th superstate
+/// above it.
 pub trait StateExt<M: IntoStateMachine>: State<M> {
     /// Return the depth of this state, where a top-level state has depth 1.
     fn depth(&mut self) -> usize;
@@ -25,6 +27,26 @@ pub trait StateExt<M: IntoStateMachine>: State<M> {
         target: &mut Self,
         handler_depth: usize,
     ) -> (usize, usize);
+
+    /// Run the entry action of the node `level` levels above this state.
+    ///
+    /// Does nothing if `level` is not smaller than the depth of this state.
+    fn enter_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    );
+
+    /// Run the exit action of the node `level` levels above this state.
+    ///
+    /// Does nothing if `level` is not smaller than the depth of this state.
+    fn exit_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    );
 }
 
 impl<M, S> StateExt<M> for S
@@ -46,6 +68,60 @@ where
         handler_depth: usize,
     ) -> (usize, usize) {
         external_transition_path::<M>(self, target, handler_depth)
+    }
+
+    fn enter_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) {
+        if level == 0 {
+            self.call_entry_action(shared_storage, context);
+        } else if let Some(mut superstate) = self.superstate() {
+            enter_superstate_level::<M>(&mut superstate, shared_storage, context, level - 1);
+        }
+    }
+
+    fn exit_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) {
+        if level == 0 {
+            self.call_exit_action(shared_storage, context);
+        } else if let Some(mut superstate) = self.superstate() {
+            exit_superstate_level::<M>(&mut superstate, shared_storage, context, level - 1);
+        }
+    }
+}
+
+/// Run the entry action of the superstate `level` levels above `superstate`.
+fn enter_superstate_level<'ctx, 'data: 'ctx, M: IntoStateMachine>(
+    superstate: &mut M::Superstate<'_>,
+    shared_storage: &mut M,
+    context: &mut M::Context<'ctx, 'data>,
+    level: usize,
+) {
+    if level == 0 {
+        superstate.call_entry_action(shared_storage, context);
+    } else if let Some(mut parent) = superstate.superstate() {
+        enter_superstate_level::<M>(&mut parent, shared_storage, context, level - 1);
+    }
+}
+
+/// Run the exit action of the superstate `level` levels above `superstate`.
+fn exit_superstate_level<'ctx, 'data: 'ctx, M: IntoStateMachine>(
+    superstate: &mut M::Superstate<'_>,
+    shared_storage: &mut M,
+    context: &mut M::Context<'ctx, 'data>,
+    level: usize,
+) {
+    if level == 0 {
+        superstate.call_exit_action(shared_storage, context);
+    } else if let Some(mut parent) = superstate.superstate() {
+        exit_superstate_level::<M>(&mut parent, shared_storage, context, level - 1);
     }
 }
 
