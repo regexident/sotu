@@ -13,6 +13,7 @@
 
 pub mod blocking;
 pub mod event;
+mod hierarchy;
 mod node;
 mod outcome;
 #[doc(hidden)]
@@ -26,6 +27,7 @@ pub use sotu_macros::Event;
 /// Common imports for writing state machines.
 pub mod prelude {
     pub use crate::blocking::{IntoStateMachine, State, Superstate};
+    pub use crate::blocking::{StateExt as _, SuperstateExt as _};
     pub use crate::node::{StateOrSuperstate, SubmachineNode};
     pub use crate::outcome::Outcome::{self, *};
 
