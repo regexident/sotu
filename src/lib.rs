@@ -14,6 +14,8 @@
 pub mod event;
 mod node;
 mod outcome;
+#[doc(hidden)]
+pub mod private;
 
 pub use node::{StateOrSuperstate, SubmachineNode};
 pub use outcome::Outcome;
