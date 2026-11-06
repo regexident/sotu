@@ -8,6 +8,10 @@ crate::hierarchy::hierarchy_algorithms!();
 pub trait StateExt<M: IntoStateMachine>: State<M> {
     /// Return the depth of this state, where a top-level state has depth 1.
     fn depth(&mut self) -> usize;
+
+    /// Return how many levels a local transition from `self` to `target`
+    /// exits and enters, as `(exit_levels, enter_levels)`.
+    fn transition_path(&mut self, target: &mut Self) -> (usize, usize);
 }
 
 impl<M, S> StateExt<M> for S
@@ -17,6 +21,10 @@ where
 {
     fn depth(&mut self) -> usize {
         state_depth::<M>(self)
+    }
+
+    fn transition_path(&mut self, target: &mut Self) -> (usize, usize) {
+        transition_path::<M>(self, target)
     }
 }
 
