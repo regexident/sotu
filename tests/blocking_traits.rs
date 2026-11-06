@@ -1,5 +1,53 @@
+use core::convert::Infallible;
+
 use sotu::Outcome;
+use sotu::blocking::{IntoStateMachine, State, Superstate};
 use sotu::private::NodeOutcome;
+
+// MARK: Probe Machine
+
+#[derive(Eq, PartialEq, Debug)]
+struct Probe;
+
+#[derive(Eq, PartialEq, Debug)]
+enum ProbeState {
+    Only,
+}
+
+impl IntoStateMachine for Probe {
+    type Event = ();
+    type Context<'ctx, 'data: 'ctx> = ();
+    type State = ProbeState;
+    type Superstate<'sub> = ();
+    type Exit = Infallible;
+
+    fn initial() -> ProbeState {
+        ProbeState::Only
+    }
+}
+
+impl State<Probe> for ProbeState {
+    fn call_handler<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut Probe,
+        _event: &(),
+        _context: &mut (),
+    ) -> Outcome<ProbeState, Infallible> {
+        Outcome::Handled
+    }
+}
+
+// MARK: Superstate Defaults
+
+#[test]
+fn unit_superstate_defers_and_matches_itself() {
+    assert_eq!(
+        <() as Superstate<Probe>>::call_handler(&mut (), &mut Probe, &(), &mut ()),
+        Outcome::Super
+    );
+    assert!(<() as Superstate<Probe>>::same_state(&(), &()));
+    assert!(<() as Superstate<Probe>>::superstate(&mut ()).is_none());
+}
 
 // MARK: Node Outcome
 
