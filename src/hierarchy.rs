@@ -11,7 +11,9 @@
 //!
 //! A local transition from the leaf `L` to a target exits the levels below the
 //! deepest common ancestor of the two and enters the levels below it again. A
-//! transition to the same node exits and enters exactly that node.
+//! transition to the same node exits and enters exactly that node. An external
+//! transition handled by the node `H` additionally exits and re-enters `H`
+//! when `H` is the source or an ancestor of both source and target.
 //!
 //! The deepest common ancestor is found by climbing the deeper chain until
 //! both are equally deep and then climbing both in lockstep, comparing nodes
@@ -74,6 +76,53 @@ macro_rules! hierarchy_algorithms {
             (source_depth - common_depth, target_depth - common_depth)
         }
 
+        /// Return how many levels an external transition from `source` to
+        /// `target`, handled by the node at `handler_depth`, exits and enters,
+        /// as `(exit_levels, enter_levels)`.
+        ///
+        /// A `handler_depth` of `0` or beyond the depth of `source` names no
+        /// handling node, so the transition is treated as a local one.
+        pub(crate) fn external_transition_path<M: IntoStateMachine>(
+            source: &mut M::State,
+            target: &mut M::State,
+            handler_depth: usize,
+        ) -> (usize, usize) {
+            let source_depth = state_depth::<M>(source);
+            let target_depth = state_depth::<M>(target);
+
+            let reenters_handler = if handler_depth == 0 || handler_depth > source_depth {
+                false
+            } else if handler_depth == source_depth {
+                source.same_state(target)
+            } else if target_depth > handler_depth {
+                // Both depths exceed `handler_depth`, so both leaves have a
+                // superstate.
+                match (source.superstate(), target.superstate()) {
+                    (Some(mut source_superstate), Some(mut target_superstate)) => {
+                        same_ancestor_at_depth::<M>(
+                            &mut source_superstate,
+                            source_depth - 1,
+                            &mut target_superstate,
+                            target_depth - 1,
+                            handler_depth,
+                        )
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            if reenters_handler {
+                return (
+                    source_depth - handler_depth + 1,
+                    target_depth - handler_depth + 1,
+                );
+            }
+
+            transition_path::<M>(source, target)
+        }
+
         /// Return the depth of the deepest superstate that is an ancestor of,
         /// or the same node as, both `first` and `second`, or `0` if there is
         /// none.
@@ -123,6 +172,47 @@ macro_rules! hierarchy_algorithms {
                 ),
                 _ => 0,
             }
+        }
+
+        /// Return whether the ancestors of `first` and `second` at `depth` are
+        /// the same node.
+        ///
+        /// `first_depth` and `second_depth` are the depths of the two
+        /// superstates and must not be smaller than `depth`.
+        fn same_ancestor_at_depth<M: IntoStateMachine>(
+            first: &mut M::Superstate<'_>,
+            first_depth: usize,
+            second: &mut M::Superstate<'_>,
+            second_depth: usize,
+            depth: usize,
+        ) -> bool {
+            if first_depth > depth {
+                return match first.superstate() {
+                    Some(mut parent) => same_ancestor_at_depth::<M>(
+                        &mut parent,
+                        first_depth - 1,
+                        second,
+                        second_depth,
+                        depth,
+                    ),
+                    None => false,
+                };
+            }
+
+            if second_depth > depth {
+                return match second.superstate() {
+                    Some(mut parent) => same_ancestor_at_depth::<M>(
+                        first,
+                        first_depth,
+                        &mut parent,
+                        second_depth - 1,
+                        depth,
+                    ),
+                    None => false,
+                };
+            }
+
+            first.same_state(second)
         }
     };
 }
