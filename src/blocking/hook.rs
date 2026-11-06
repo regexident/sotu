@@ -62,3 +62,55 @@ where
         self(shared_storage, node, event, context);
     }
 }
+
+/// Call a transition hook function, with or without a context parameter.
+///
+/// Implemented for every function that takes the shared storage, the source
+/// state and the target state, optionally followed by the context. It exists
+/// for the same reason as [`DispatchHook`]: generated code calls
+/// [`call_transition_hook`](TransitionHook::call_transition_hook) and the
+/// compiler infers the `Arity` marker, which is [`WithoutContext`] or
+/// [`WithContext`]. A hook without a context parameter never sees the context.
+pub trait TransitionHook<'ctx, 'data: 'ctx, M: IntoStateMachine, Arity> {
+    /// Call the hook for a transition from `source` to `target`, forwarding
+    /// `context` if the hook takes it.
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        context: &mut M::Context<'ctx, 'data>,
+    );
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, WithoutContext> for F
+where
+    M: IntoStateMachine,
+    F: Fn(&mut M, &M::State, &M::State),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) {
+        self(shared_storage, source, target);
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, WithContext> for F
+where
+    M: IntoStateMachine,
+    F: Fn(&mut M, &M::State, &M::State, &mut M::Context<'ctx, 'data>),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        context: &mut M::Context<'ctx, 'data>,
+    ) {
+        self(shared_storage, source, target, context);
+    }
+}
