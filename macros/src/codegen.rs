@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::lower::{ArmIr, DispatchIr, Ir, MachineIr, StateEnumIr};
+use crate::lower::{ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, PatternIr, StateEnumIr};
 
 // MARK: Generation
 
@@ -36,10 +36,14 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
     let variants = state_enum.variants.iter().map(|variant| {
         let docs = &variant.docs;
         let variant_name = &variant.name;
+        let field_names = variant.fields.iter().map(|field| &field.name);
+        let field_types = variant.fields.iter().map(|field| &field.ty);
 
         quote! {
             #(#docs)*
-            #variant_name {}
+            #variant_name {
+                #(#field_names: #field_types),*
+            }
         }
     });
 
@@ -47,9 +51,19 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
         let constructor = &variant.constructor;
         let variant_name = &variant.name;
 
+        let parameters = variant
+            .fields
+            .iter()
+            .filter(|field| field.default.is_none())
+            .map(|FieldIr { name, ty, .. }| quote!(#name: #ty));
+
+        let initializers = variant.fields.iter().map(field_initializer);
+
         quote! {
-            pub fn #constructor() -> Self {
-                Self::#variant_name {}
+            pub fn #constructor(#(#parameters),*) -> Self {
+                Self::#variant_name {
+                    #(#initializers),*
+                }
             }
         }
     });
@@ -62,6 +76,15 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
         impl #name {
             #(#constructors)*
         }
+    }
+}
+
+fn field_initializer(field: &FieldIr) -> TokenStream {
+    let name = &field.name;
+
+    match &field.default {
+        Some(default) => quote!(#name: #default),
+        None => quote!(#name),
     }
 }
 
@@ -144,16 +167,38 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
 }
 
 fn dispatch_arm(dispatch: &DispatchIr, arm: &ArmIr) -> TokenStream {
-    let shared_storage = &dispatch.shared_storage;
-    let state = &dispatch.state;
-
-    let ArmIr {
-        variant,
-        handler,
-        arguments,
-    } = arm;
+    let pattern = pattern(dispatch, &arm.pattern);
+    let call = call(dispatch, &arm.call);
 
     quote! {
-        #state::#variant {} => #shared_storage::#handler(#(#arguments),*),
+        #pattern => #call,
+    }
+}
+
+fn pattern(dispatch: &DispatchIr, pattern: &PatternIr) -> TokenStream {
+    let state = &dispatch.state;
+
+    let PatternIr {
+        variant,
+        bindings,
+        has_rest,
+    } = pattern;
+
+    let rest = has_rest.then(|| quote!(..));
+
+    quote! {
+        #state::#variant { #(#bindings,)* #rest }
+    }
+}
+
+fn call(dispatch: &DispatchIr, call: &CallIr) -> TokenStream {
+    let shared_storage = &dispatch.shared_storage;
+    let CallIr {
+        function,
+        arguments,
+    } = call;
+
+    quote! {
+        #shared_storage::#function(#(#arguments),*)
     }
 }

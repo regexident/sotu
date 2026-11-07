@@ -3,10 +3,11 @@
 use proc_macro2::Span;
 use syn::ext::IdentExt;
 use syn::{
-    Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Pat, PatType, Type, parse_quote,
+    Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType, Type,
+    parse_quote,
 };
 
-use crate::parse::{ItemAttribute, MachineArgs, parse_item_attribute, push_error};
+use crate::parse::{ItemAttribute, MachineArgs, StateArgs, parse_item_attribute, push_error};
 
 // MARK: Model
 
@@ -34,17 +35,52 @@ pub(crate) struct StateModel {
     pub(crate) constructor: Ident,
     /// The classified inputs of the handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
+    /// The local storage fields: the handler's inputs, then the `local_storage` key.
+    pub(crate) fields: Vec<FieldModel>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
 }
 
+/// A local storage field of a state.
+pub(crate) struct FieldModel {
+    /// The name of the field.
+    pub(crate) name: Ident,
+    /// The type of the field.
+    pub(crate) ty: Type,
+    /// The value the constructor gives the field instead of taking a parameter.
+    pub(crate) default: Option<DefaultValue>,
+}
+
 /// What an input of a state handler receives.
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+// Inputs live in short vectors for the duration of one macro expansion, so the
+// size of the largest variant does not justify boxing the syntax trees.
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub(crate) enum InputKind {
     /// The receiver, which is the shared storage.
     Receiver,
     /// The input named `event`.
     Event,
+    /// A reference to the local storage field called `name`.
+    LocalStorage {
+        /// The name of the field.
+        name: Ident,
+        /// The type behind the reference.
+        ty: Type,
+        /// Whether the reference is mutable.
+        mutable: bool,
+        /// The value of a `#[default]` attribute on the input.
+        default: Option<DefaultValue>,
+    },
+}
+
+/// The value given by a `#[default]` attribute.
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub(crate) enum DefaultValue {
+    /// `#[default]`, which is the `Default` value of the field's type.
+    Default,
+    /// `#[default = expression]`.
+    Expr(Expr),
 }
 
 // MARK: Analysis
@@ -60,17 +96,23 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     let mut event_type = None;
 
     for impl_item in &mut item.items {
-        if !take_item_attributes(impl_item, &mut errors) {
+        let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
             continue;
-        }
+        };
 
-        if let ImplItem::Fn(function) = impl_item {
-            states.push(analyze_state(function, &mut event_type, &mut errors));
-        } else {
-            push_error(
+        match (attribute, &mut *impl_item) {
+            (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
+                states.push(analyze_state(
+                    function,
+                    state_arguments,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
+            (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
                 syn::Error::new_spanned(&*impl_item, "`#[state]` can only be applied to functions"),
-            );
+            ),
         }
     }
 
@@ -100,22 +142,25 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     })
 }
 
-/// Remove the attributes of `sotu` from `item`, returning whether one was `#[state]`.
-fn take_item_attributes(item: &mut ImplItem, errors: &mut Option<syn::Error>) -> bool {
+/// Remove the attributes of `sotu` from `item`, returning the one it carried.
+fn take_item_attribute(
+    item: &mut ImplItem,
+    errors: &mut Option<syn::Error>,
+) -> Option<ItemAttribute> {
     let attributes = match item {
         ImplItem::Const(item) => &mut item.attrs,
         ImplItem::Fn(item) => &mut item.attrs,
         ImplItem::Type(item) => &mut item.attrs,
         ImplItem::Macro(item) => &mut item.attrs,
-        _ => return false,
+        _ => return None,
     };
 
-    let mut is_state = false;
+    let mut taken = None;
 
     attributes.retain(|attribute| match parse_item_attribute(attribute) {
         Ok(None) => true,
-        Ok(Some(ItemAttribute::State(_))) => {
-            is_state = true;
+        Ok(Some(item_attribute)) => {
+            taken = Some(item_attribute);
 
             false
         }
@@ -126,11 +171,12 @@ fn take_item_attributes(item: &mut ImplItem, errors: &mut Option<syn::Error>) ->
         }
     });
 
-    is_state
+    taken
 }
 
 fn analyze_state(
-    function: &ImplItemFn,
+    function: &mut ImplItemFn,
+    arguments: StateArgs,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> StateModel {
@@ -139,18 +185,52 @@ fn analyze_state(
     let constructor = snake_case(&variant);
     let mut inputs = Vec::new();
 
-    for input in &function.sig.inputs {
+    for input in &mut function.sig.inputs {
         match input {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
-            FnArg::Typed(typed) => match event_referent(typed) {
+            FnArg::Typed(typed) if is_event(typed) => match event_referent(typed) {
                 Ok(referent) => {
                     inputs.push(InputKind::Event);
                     event_type.get_or_insert_with(|| referent.clone());
                 }
                 Err(error) => push_error(errors, error),
             },
+            FnArg::Typed(typed) => {
+                let Some((name, ty, mutable)) = local_storage_input(typed) else {
+                    push_error(
+                        errors,
+                        syn::Error::new_spanned(
+                            &*typed,
+                            "unsupported input; state handlers take a receiver, `event` and \
+                             references to local storage",
+                        ),
+                    );
+
+                    continue;
+                };
+
+                inputs.push(InputKind::LocalStorage {
+                    name,
+                    ty,
+                    mutable,
+                    default: take_default(&mut typed.attrs, errors),
+                });
+            }
         }
     }
+
+    let mut fields: Vec<FieldModel> = inputs.iter().filter_map(input_field).collect();
+
+    fields.extend(
+        arguments
+            .local_storage
+            .into_iter()
+            .map(|(name, ty)| FieldModel {
+                name,
+                ty,
+                default: None,
+            }),
+    );
 
     let docs = function
         .attrs
@@ -164,23 +244,79 @@ fn analyze_state(
         variant,
         constructor,
         inputs,
+        fields,
         docs,
     }
 }
 
+fn local_storage_input(typed: &PatType) -> Option<(Ident, Type, bool)> {
+    let Pat::Ident(pattern) = &*typed.pat else {
+        return None;
+    };
+
+    let Type::Reference(reference) = &*typed.ty else {
+        return None;
+    };
+
+    Some((
+        pattern.ident.clone(),
+        (*reference.elem).clone(),
+        reference.mutability.is_some(),
+    ))
+}
+
+/// Remove the `#[default]` attributes from `attributes`, returning the value of the last.
+fn take_default(
+    attributes: &mut Vec<Attribute>,
+    errors: &mut Option<syn::Error>,
+) -> Option<DefaultValue> {
+    let mut default = None;
+
+    attributes.retain(|attribute| {
+        if !attribute.path().is_ident("default") {
+            return true;
+        }
+
+        match &attribute.meta {
+            Meta::Path(_) => default = Some(DefaultValue::Default),
+            Meta::NameValue(name_value) => {
+                default = Some(DefaultValue::Expr(name_value.value.clone()));
+            }
+            Meta::List(list) => push_error(
+                errors,
+                syn::Error::new_spanned(list, "expected `#[default]` or `#[default = expression]`"),
+            ),
+        }
+
+        false
+    });
+
+    default
+}
+
+/// Return the field that the input `input` declares, if it is local storage.
+fn input_field(input: &InputKind) -> Option<FieldModel> {
+    match input {
+        InputKind::LocalStorage {
+            name, ty, default, ..
+        } => Some(FieldModel {
+            name: name.clone(),
+            ty: ty.clone(),
+            default: default.clone(),
+        }),
+        InputKind::Receiver | InputKind::Event => None,
+    }
+}
+
+/// Return whether `typed` is the input named `event`.
+fn is_event(typed: &PatType) -> bool {
+    matches!(&*typed.pat, Pat::Ident(pattern) if pattern.ident == "event")
+}
+
 /// Return the type behind the reference of the `event` input `typed`.
 ///
-/// Fails if `typed` is any other input, or if `event` is not a shared reference.
+/// Fails if `event` is not a shared reference.
 fn event_referent(typed: &PatType) -> syn::Result<&Type> {
-    let is_event = matches!(&*typed.pat, Pat::Ident(pattern) if pattern.ident == "event");
-
-    if !is_event {
-        return Err(syn::Error::new_spanned(
-            typed,
-            "unsupported input; state handlers take a receiver and `event`",
-        ));
-    }
-
     match &*typed.ty {
         Type::Reference(reference) if reference.mutability.is_none() => Ok(&reference.elem),
         ty => Err(syn::Error::new_spanned(
@@ -366,6 +502,101 @@ mod tests {
             .collect();
 
         assert_eq!(variants, ["B", "A"]);
+    }
+
+    #[test]
+    fn reference_inputs_become_local_storage() {
+        let model = model(parse_quote! {
+            impl Counter {
+                #[state]
+                fn on(&mut self, counter: &mut u32, event: &Event) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let state = &model.states[0];
+
+        let [
+            InputKind::Receiver,
+            InputKind::LocalStorage {
+                name,
+                ty,
+                mutable,
+                default,
+            },
+            InputKind::Event,
+        ] = state.inputs.as_slice()
+        else {
+            panic!("the inputs should be a receiver, local storage and `event`");
+        };
+
+        assert_eq!(*name, ident("counter"));
+        assert_eq!(quote!(#ty).to_string(), "u32");
+        assert!(*mutable);
+        assert_eq!(*default, None);
+
+        let [field] = state.fields.as_slice() else {
+            panic!("the state should have one field");
+        };
+
+        let field_type = &field.ty;
+
+        assert_eq!(field.name, ident("counter"));
+        assert_eq!(quote!(#field_type).to_string(), "u32");
+    }
+
+    #[test]
+    fn default_attributes_are_recorded() {
+        let model = model(parse_quote! {
+            impl Counter {
+                #[state]
+                fn on(#[default] lit: &mut bool, #[default = 3] level: &u8) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let state = &model.states[0];
+
+        assert_eq!(state.fields[0].default, Some(DefaultValue::Default));
+
+        let Some(DefaultValue::Expr(level)) = &state.fields[1].default else {
+            panic!("`level` should have an expression default");
+        };
+
+        assert_eq!(quote!(#level).to_string(), "3");
+
+        let ImplItem::Fn(function) = &model.item.items[0] else {
+            panic!("the handler should stay a function");
+        };
+
+        let emitted = &function.sig;
+
+        assert_eq!(
+            quote!(#emitted).to_string(),
+            "fn on (lit : & mut bool , level : & u8) -> Outcome < State >"
+        );
+    }
+
+    #[test]
+    fn local_storage_key_appends_fields() {
+        let model = model(parse_quote! {
+            impl Counter {
+                #[state(local_storage(started: bool))]
+                fn on(counter: &mut u32, #[default] lit: &mut bool) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let fields: Vec<String> = model.states[0]
+            .fields
+            .iter()
+            .map(|field| field.name.to_string())
+            .collect();
+
+        assert_eq!(fields, ["counter", "lit", "started"]);
     }
 
     #[test]
