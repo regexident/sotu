@@ -4,6 +4,7 @@
 //! so most users never name this crate directly.
 
 mod analyze;
+mod codegen;
 mod event_derive;
 mod lower;
 mod parse;
