@@ -3,7 +3,9 @@
 //! The macros are re-exported by `sotu` behind its default `macros` feature,
 //! so most users never name this crate directly.
 
+mod analyze;
 mod event_derive;
+mod parse;
 
 /// Derive the `From`, `Variant` and `SubEvent` implementations of an event enum.
 ///
