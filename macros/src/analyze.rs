@@ -7,7 +7,9 @@ use syn::{
     parse_quote,
 };
 
-use crate::parse::{ItemAttribute, MachineArgs, StateArgs, parse_item_attribute, push_error};
+use crate::parse::{
+    ItemAttribute, MachineArgs, StateArgs, SuperstateArgs, parse_item_attribute, push_error,
+};
 
 // MARK: Model
 
@@ -21,6 +23,8 @@ pub(crate) struct Model {
     pub(crate) event_type: Type,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
+    /// The superstates in declaration order.
+    pub(crate) superstates: Vec<SuperstateModel>,
     /// The entry and exit actions in declaration order.
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
@@ -35,6 +39,8 @@ pub(crate) struct StateModel {
     pub(crate) variant: Ident,
     /// The name of the generated constructor.
     pub(crate) constructor: Ident,
+    /// The handler name of the enclosing superstate.
+    pub(crate) superstate: Option<Ident>,
     /// The classified inputs of the handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
     /// The local storage fields: the handler's inputs, then the `local_storage` key.
@@ -42,6 +48,24 @@ pub(crate) struct StateModel {
     /// The action to run when the state is entered.
     pub(crate) entry_action: Option<Ident>,
     /// The action to run when the state is exited.
+    pub(crate) exit_action: Option<Ident>,
+    /// The doc comments of the handler.
+    pub(crate) docs: Vec<Attribute>,
+}
+
+/// A superstate handler of the machine.
+pub(crate) struct SuperstateModel {
+    /// The name of the handler function.
+    pub(crate) handler: Ident,
+    /// The name of the generated enum variant.
+    pub(crate) variant: Ident,
+    /// The handler name of the enclosing superstate.
+    pub(crate) superstate: Option<Ident>,
+    /// The classified inputs of the handler, in declaration order.
+    pub(crate) inputs: Vec<InputKind>,
+    /// The action to run when the superstate is entered.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run when the superstate is exited.
     pub(crate) exit_action: Option<Ident>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
@@ -107,6 +131,7 @@ pub(crate) enum DefaultValue {
 pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result<Model> {
     let mut errors = None;
     let mut states = Vec::new();
+    let mut superstates = Vec::new();
     let mut actions = Vec::new();
     let mut event_type = None;
 
@@ -124,12 +149,27 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
                     &mut errors,
                 ));
             }
+            (ItemAttribute::Superstate(superstate_arguments), ImplItem::Fn(function)) => {
+                superstates.push(analyze_superstate(
+                    function,
+                    superstate_arguments,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 actions.push(analyze_action(function, &mut errors));
             }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
                 syn::Error::new_spanned(&*impl_item, "`#[state]` can only be applied to functions"),
+            ),
+            (ItemAttribute::Superstate(_), _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[superstate]` can only be applied to functions",
+                ),
             ),
             (ItemAttribute::Action, _) => push_error(
                 &mut errors,
@@ -141,7 +181,8 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         }
     }
 
-    check_action_references(&states, &actions, &mut errors);
+    check_action_references(&states, &superstates, &actions, &mut errors);
+    check_superstate_references(&states, &superstates, &mut errors);
 
     let Some(initial) = arguments.initial else {
         let mut error = syn::Error::new(
@@ -165,6 +206,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         initial,
         event_type: event_type.unwrap_or_else(|| parse_quote!(())),
         states,
+        superstates,
         actions,
         item,
     })
@@ -205,6 +247,7 @@ fn take_item_attribute(
 /// Report every `entry_action` and `exit_action` that names no `#[action]`.
 fn check_action_references(
     states: &[StateModel],
+    superstates: &[SuperstateModel],
     actions: &[ActionModel],
     errors: &mut Option<syn::Error>,
 ) {
@@ -220,17 +263,48 @@ fn check_action_references(
         check(&state.entry_action, "entry action not found");
         check(&state.exit_action, "exit action not found");
     }
+
+    for superstate in superstates {
+        check(&superstate.entry_action, "entry action not found");
+        check(&superstate.exit_action, "exit action not found");
+    }
 }
 
-fn analyze_state(
+/// Report every `superstate` link that names no `#[superstate]` handler.
+fn check_superstate_references(
+    states: &[StateModel],
+    superstates: &[SuperstateModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let links = states
+        .iter()
+        .map(|state| &state.superstate)
+        .chain(superstates.iter().map(|superstate| &superstate.superstate));
+
+    for name in links.flatten() {
+        if !superstates
+            .iter()
+            .any(|superstate| superstate.handler == *name)
+        {
+            push_error(
+                errors,
+                syn::Error::new_spanned(name, "superstate not found"),
+            );
+        }
+    }
+}
+
+/// Classify the inputs of a handler.
+///
+/// Only state handlers have `#[default]` attributes taken from their inputs, so
+/// `takes_defaults` leaves the attribute in place on a superstate handler, where
+/// the compiler rejects it.
+fn handler_inputs(
     function: &mut ImplItemFn,
-    arguments: StateArgs,
+    takes_defaults: bool,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
-) -> StateModel {
-    let handler = function.sig.ident.clone();
-    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
-    let constructor = snake_case(&variant);
+) -> Vec<InputKind> {
     let mut inputs = Vec::new();
 
     for input in &mut function.sig.inputs {
@@ -245,27 +319,86 @@ fn analyze_state(
             },
             FnArg::Typed(typed) => {
                 let Some((name, ty, mutable)) = local_storage_input(typed) else {
+                    let node = if takes_defaults {
+                        "state"
+                    } else {
+                        "superstate"
+                    };
+
                     push_error(
                         errors,
                         syn::Error::new_spanned(
                             &*typed,
-                            "unsupported input; state handlers take a receiver, `event` and \
-                             references to local storage",
+                            format!(
+                                "unsupported input; {node} handlers take a receiver, `event` and \
+                                 references to local storage"
+                            ),
                         ),
                     );
 
                     continue;
                 };
 
+                let default = if takes_defaults {
+                    take_default(&mut typed.attrs, errors)
+                } else {
+                    None
+                };
+
                 inputs.push(InputKind::LocalStorage {
                     name,
                     ty,
                     mutable,
-                    default: take_default(&mut typed.attrs, errors),
+                    default,
                 });
             }
         }
     }
+
+    inputs
+}
+
+fn analyze_superstate(
+    function: &mut ImplItemFn,
+    arguments: SuperstateArgs,
+    event_type: &mut Option<Type>,
+    errors: &mut Option<syn::Error>,
+) -> SuperstateModel {
+    let handler = function.sig.ident.clone();
+    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
+    let inputs = handler_inputs(function, false, event_type, errors);
+    let docs = handler_docs(function);
+
+    SuperstateModel {
+        handler,
+        variant,
+        superstate: arguments.superstate,
+        inputs,
+        entry_action: arguments.entry_action,
+        exit_action: arguments.exit_action,
+        docs,
+    }
+}
+
+fn handler_docs(function: &ImplItemFn) -> Vec<Attribute> {
+    function
+        .attrs
+        .iter()
+        .filter(|attribute| attribute.path().is_ident("doc"))
+        .cloned()
+        .collect()
+}
+
+fn analyze_state(
+    function: &mut ImplItemFn,
+    arguments: StateArgs,
+    event_type: &mut Option<Type>,
+    errors: &mut Option<syn::Error>,
+) -> StateModel {
+    let handler = function.sig.ident.clone();
+    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
+    let constructor = snake_case(&variant);
+    let inputs = handler_inputs(function, true, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(input_field).collect();
 
@@ -280,17 +413,13 @@ fn analyze_state(
             }),
     );
 
-    let docs = function
-        .attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("doc"))
-        .cloned()
-        .collect();
+    let docs = handler_docs(function);
 
     StateModel {
         handler,
         variant,
         constructor,
+        superstate: arguments.superstate,
         inputs,
         fields,
         entry_action: arguments.entry_action,
@@ -722,6 +851,52 @@ mod tests {
 
         assert!(
             message.starts_with("entry action not found"),
+            "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn superstate_links_are_resolved() {
+        let model = model(parse_quote! {
+            impl Counter {
+                #[state(superstate = blinking)]
+                fn on(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn blinking(event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(model.states[0].superstate, Some(ident("blinking")));
+    }
+
+    #[test]
+    fn unknown_superstate_is_reported() {
+        let item: ItemImpl = parse_quote! {
+            impl Counter {
+                #[state(superstate = missing)]
+                fn on(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn blinking(event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        };
+
+        let message = match analyze(arguments(), item) {
+            Ok(_) => panic!("an unknown superstate should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            message.starts_with("superstate not found"),
             "unexpected message: {message}"
         );
     }

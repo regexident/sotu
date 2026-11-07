@@ -3,7 +3,9 @@
 use proc_macro2::Span;
 use syn::{Attribute, Expr, Ident, ItemImpl, Type, parse_quote};
 
-use crate::analyze::{ActionModel, DefaultValue, FieldModel, InputKind, Model, StateModel};
+use crate::analyze::{
+    ActionModel, DefaultValue, FieldModel, InputKind, Model, StateModel, SuperstateModel,
+};
 
 // MARK: Intermediate Representation
 
@@ -17,6 +19,8 @@ pub(crate) struct Ir {
     pub(crate) machine: MachineIr,
     /// The implementation of the blocking `State` trait.
     pub(crate) dispatch: DispatchIr,
+    /// The generated superstate enum, if the machine has superstates.
+    pub(crate) superstate: Option<SuperstateIr>,
 }
 
 /// The generated state enum and its constructors.
@@ -57,6 +61,8 @@ pub(crate) struct MachineIr {
     pub(crate) event_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
+    /// The superstate enum, or `None` if the associated type is `()`.
+    pub(crate) superstate: Option<SuperstateTypeIr>,
     /// The expression that builds the initial state.
     pub(crate) initial: Expr,
 }
@@ -79,6 +85,50 @@ pub(crate) struct DispatchIr {
     pub(crate) entry_actions: Option<ActionDispatchIr>,
     /// The body of `call_exit_action`, if any state has an exit action.
     pub(crate) exit_actions: Option<ActionDispatchIr>,
+    /// The body of `superstate`, if the machine has superstates.
+    pub(crate) parents: Option<ParentDispatchIr>,
+}
+
+/// The name of the superstate enum.
+#[derive(Clone)]
+pub(crate) struct SuperstateTypeIr {
+    /// The name of the enum.
+    pub(crate) name: Ident,
+}
+
+/// The generated superstate enum and the implementation of the blocking
+/// `Superstate` trait.
+pub(crate) struct SuperstateIr {
+    /// The type of the enum.
+    pub(crate) ty: SuperstateTypeIr,
+    /// The variants in declaration order.
+    pub(crate) variants: Vec<SuperstateVariantIr>,
+    /// The type the handlers belong to.
+    pub(crate) shared_storage: Type,
+    /// The event type of the machine.
+    pub(crate) event_type: Type,
+    /// The name of the state enum.
+    pub(crate) state: Ident,
+    /// The name of the shared storage parameter, underscored when unused.
+    pub(crate) shared_storage_parameter: Ident,
+    /// The name of the event parameter, underscored when unused.
+    pub(crate) event_parameter: Ident,
+    /// One match arm per variant, in declaration order.
+    pub(crate) arms: Vec<ArmIr>,
+    /// The body of `call_entry_action`, if any superstate has an entry action.
+    pub(crate) entry_actions: Option<ActionDispatchIr>,
+    /// The body of `call_exit_action`, if any superstate has an exit action.
+    pub(crate) exit_actions: Option<ActionDispatchIr>,
+    /// The body of `superstate`.
+    pub(crate) parents: ParentDispatchIr,
+}
+
+/// A variant of the superstate enum.
+pub(crate) struct SuperstateVariantIr {
+    /// The doc comments copied from the handler.
+    pub(crate) docs: Vec<Attribute>,
+    /// The name of the variant.
+    pub(crate) name: Ident,
 }
 
 /// A match arm that calls one handler.
@@ -89,7 +139,7 @@ pub(crate) struct ArmIr {
     pub(crate) call: CallIr,
 }
 
-/// The method that runs the entry or exit action of the active state.
+/// The method that runs the entry or exit action of the active node.
 pub(crate) struct ActionDispatchIr {
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
@@ -97,12 +147,44 @@ pub(crate) struct ActionDispatchIr {
     pub(crate) arms: Vec<ActionArmIr>,
 }
 
-/// A match arm that runs the action of one state, if it has one.
+/// A match arm that runs the action of one node, if it has one.
 pub(crate) struct ActionArmIr {
     /// The pattern the arm matches.
     pub(crate) pattern: PatternIr,
     /// The call to the action.
     pub(crate) call: Option<CallIr>,
+}
+
+/// The method that builds the superstate enclosing a node.
+pub(crate) struct ParentDispatchIr {
+    /// The type of the superstate enum.
+    pub(crate) superstate: SuperstateTypeIr,
+    /// One match arm per variant, in declaration order.
+    pub(crate) arms: Vec<ParentArmIr>,
+}
+
+/// A match arm that builds the parent of one node.
+pub(crate) struct ParentArmIr {
+    /// The pattern the arm matches, binding the fields the parent borrows.
+    pub(crate) pattern: PatternIr,
+    /// The parent, or `None` for a top-level node.
+    pub(crate) parent: Option<ParentIr>,
+}
+
+/// A superstate built from the fields of its child.
+pub(crate) struct ParentIr {
+    /// The variant of the superstate enum.
+    pub(crate) variant: Ident,
+    /// The fields of the variant.
+    pub(crate) fields: Vec<ParentFieldIr>,
+}
+
+/// A borrowed field of a parent.
+pub(crate) struct ParentFieldIr {
+    /// The name of the field.
+    pub(crate) name: Ident,
+    /// The value of the field, or `None` if the binding of the same name is the value.
+    pub(crate) value: Option<Expr>,
 }
 
 /// The pattern of one variant, binding only the fields a call takes.
@@ -125,6 +207,13 @@ pub(crate) struct CallIr {
     pub(crate) arguments: Vec<Ident>,
 }
 
+/// The parts of a state or superstate that action dispatch reads.
+struct ActionNode<'model> {
+    variant: &'model Ident,
+    fields: &'model [FieldModel],
+    action: Option<&'model Ident>,
+}
+
 // MARK: Lowering
 
 const SHARED_STORAGE: &str = "shared_storage";
@@ -133,6 +222,7 @@ const EVENT: &str = "event";
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
     let state = Ident::new("State", Span::call_site());
+    let superstate_type = lower_superstate_type(model);
 
     Ir {
         item: model.item.clone(),
@@ -144,22 +234,33 @@ pub(crate) fn lower(model: &Model) -> Ir {
             shared_storage: model.shared_storage.clone(),
             event_type: model.event_type.clone(),
             state: state.clone(),
+            superstate: superstate_type.clone(),
             initial: model.initial.clone(),
         },
         dispatch: DispatchIr {
             shared_storage: model.shared_storage.clone(),
             event_type: model.event_type.clone(),
-            state,
+            state: state.clone(),
             shared_storage_parameter: handler_parameter(
                 model,
                 &InputKind::Receiver,
                 SHARED_STORAGE,
             ),
             event_parameter: handler_parameter(model, &InputKind::Event, EVENT),
-            arms: model.states.iter().map(lower_arm).collect(),
-            entry_actions: lower_action_dispatch(model, |state| state.entry_action.as_ref()),
-            exit_actions: lower_action_dispatch(model, |state| state.exit_action.as_ref()),
+            arms: model
+                .states
+                .iter()
+                .map(|state| {
+                    lower_arm(&state.variant, &state.fields, &state.handler, &state.inputs)
+                })
+                .collect(),
+            entry_actions: lower_state_actions(model, |state| state.entry_action.as_ref()),
+            exit_actions: lower_state_actions(model, |state| state.exit_action.as_ref()),
+            parents: superstate_type
+                .clone()
+                .map(|superstate| lower_state_parents(model, superstate)),
         },
+        superstate: superstate_type.map(|ty| lower_superstate(model, ty, state)),
     }
 }
 
@@ -185,41 +286,196 @@ fn lower_field(field: &FieldModel) -> FieldIr {
     }
 }
 
-fn lower_arm(state: &StateModel) -> ArmIr {
+fn lower_arm(
+    variant: &Ident,
+    fields: &[FieldModel],
+    handler: &Ident,
+    inputs: &[InputKind],
+) -> ArmIr {
     ArmIr {
-        pattern: lower_pattern(state, &state.inputs),
-        call: lower_call(&state.handler, &state.inputs),
+        pattern: lower_pattern(variant, fields, inputs),
+        call: lower_call(handler, inputs),
     }
 }
 
-/// Lower the method that runs the action `attached` selects from each state.
-///
-/// Returns `None` when no state has such an action, which keeps the no-op
-/// default of the `State` trait.
-fn lower_action_dispatch(
-    model: &Model,
-    attached: fn(&StateModel) -> Option<&Ident>,
-) -> Option<ActionDispatchIr> {
-    let resolve = |state: &StateModel| -> Option<&ActionModel> {
-        let name = attached(state)?;
+// MARK: Superstates
 
-        model.actions.iter().find(|action| action.name == *name)
-    };
-
-    if !model.states.iter().any(|state| attached(state).is_some()) {
+/// Return the type of the superstate enum, or `None` if the machine has no superstates.
+fn lower_superstate_type(model: &Model) -> Option<SuperstateTypeIr> {
+    if model.superstates.is_empty() {
         return None;
     }
 
-    let takes_receiver = model
-        .states
+    Some(SuperstateTypeIr {
+        name: Ident::new("Superstate", Span::call_site()),
+    })
+}
+
+fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> SuperstateIr {
+    let takes = |input: &InputKind| {
+        model
+            .superstates
+            .iter()
+            .any(|superstate| superstate.inputs.contains(input))
+    };
+
+    SuperstateIr {
+        variants: model
+            .superstates
+            .iter()
+            .map(lower_superstate_variant)
+            .collect(),
+        shared_storage: model.shared_storage.clone(),
+        event_type: model.event_type.clone(),
+        state,
+        shared_storage_parameter: parameter(SHARED_STORAGE, takes(&InputKind::Receiver)),
+        event_parameter: parameter(EVENT, takes(&InputKind::Event)),
+        arms: model
+            .superstates
+            .iter()
+            .map(|superstate| {
+                lower_arm(
+                    &superstate.variant,
+                    &[],
+                    &superstate.handler,
+                    &superstate.inputs,
+                )
+            })
+            .collect(),
+        entry_actions: lower_superstate_actions(model, |superstate| {
+            superstate.entry_action.as_ref()
+        }),
+        exit_actions: lower_superstate_actions(model, |superstate| superstate.exit_action.as_ref()),
+        parents: lower_superstate_parents(model, ty.clone()),
+        ty,
+    }
+}
+
+fn lower_superstate_variant(superstate: &SuperstateModel) -> SuperstateVariantIr {
+    SuperstateVariantIr {
+        docs: superstate.docs.clone(),
+        name: superstate.variant.clone(),
+    }
+}
+
+// MARK: Parents
+
+fn lower_state_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDispatchIr {
+    ParentDispatchIr {
+        superstate,
+        arms: model
+            .states
+            .iter()
+            .map(|state| {
+                let parent = find_superstate(model, state.superstate.as_ref());
+
+                lower_parent_arm(&state.variant, &[], parent)
+            })
+            .collect(),
+    }
+}
+
+fn lower_superstate_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDispatchIr {
+    ParentDispatchIr {
+        superstate,
+        arms: model
+            .superstates
+            .iter()
+            .map(|child| {
+                let parent = find_superstate(model, child.superstate.as_ref());
+
+                lower_parent_arm(&child.variant, &[], parent)
+            })
+            .collect(),
+    }
+}
+
+fn find_superstate<'model>(
+    model: &'model Model,
+    link: Option<&Ident>,
+) -> Option<&'model SuperstateModel> {
+    let name = link?;
+
+    model
+        .superstates
         .iter()
-        .filter_map(resolve)
+        .find(|superstate| superstate.handler == *name)
+}
+
+fn lower_parent_arm(
+    variant: &Ident,
+    fields: &[FieldModel],
+    parent: Option<&SuperstateModel>,
+) -> ParentArmIr {
+    let bindings: Vec<Ident> = Vec::new();
+
+    ParentArmIr {
+        pattern: PatternIr {
+            variant: variant.clone(),
+            has_rest: bindings.len() < fields.len(),
+            bindings,
+        },
+        parent: parent.map(|parent| ParentIr {
+            variant: parent.variant.clone(),
+            fields: Vec::new(),
+        }),
+    }
+}
+
+// MARK: Actions
+
+fn lower_state_actions(
+    model: &Model,
+    attached: fn(&StateModel) -> Option<&Ident>,
+) -> Option<ActionDispatchIr> {
+    let nodes = model.states.iter().map(|state| ActionNode {
+        variant: &state.variant,
+        fields: &state.fields,
+        action: attached(state),
+    });
+
+    lower_action_dispatch(&model.actions, nodes.collect())
+}
+
+fn lower_superstate_actions(
+    model: &Model,
+    attached: fn(&SuperstateModel) -> Option<&Ident>,
+) -> Option<ActionDispatchIr> {
+    let nodes = model.superstates.iter().map(|superstate| ActionNode {
+        variant: &superstate.variant,
+        fields: &[],
+        action: attached(superstate),
+    });
+
+    lower_action_dispatch(&model.actions, nodes.collect())
+}
+
+/// Lower the method that runs the action attached to each of `nodes`.
+///
+/// Returns `None` when no node has an action, which keeps the no-op default of
+/// the trait.
+fn lower_action_dispatch(
+    actions: &[ActionModel],
+    nodes: Vec<ActionNode<'_>>,
+) -> Option<ActionDispatchIr> {
+    if nodes.iter().all(|node| node.action.is_none()) {
+        return None;
+    }
+
+    let resolve = |node: &ActionNode<'_>| {
+        let name = node.action?;
+
+        actions.iter().find(|action| action.name == *name)
+    };
+
+    let takes_receiver = nodes
+        .iter()
+        .filter_map(&resolve)
         .any(|action| action.inputs.contains(&InputKind::Receiver));
 
-    let arms = model
-        .states
+    let arms = nodes
         .iter()
-        .map(|state| lower_action_arm(state, resolve(state)))
+        .map(|node| lower_action_arm(node, resolve(node)))
         .collect();
 
     Some(ActionDispatchIr {
@@ -228,20 +484,22 @@ fn lower_action_dispatch(
     })
 }
 
-fn lower_action_arm(state: &StateModel, action: Option<&ActionModel>) -> ActionArmIr {
+fn lower_action_arm(node: &ActionNode<'_>, action: Option<&ActionModel>) -> ActionArmIr {
     match action {
         Some(action) => ActionArmIr {
-            pattern: lower_pattern(state, &action.inputs),
+            pattern: lower_pattern(node.variant, node.fields, &action.inputs),
             call: Some(lower_call(&action.name, &action.inputs)),
         },
         None => ActionArmIr {
-            pattern: lower_pattern(state, &[]),
+            pattern: lower_pattern(node.variant, node.fields, &[]),
             call: None,
         },
     }
 }
 
-fn lower_pattern(state: &StateModel, inputs: &[InputKind]) -> PatternIr {
+// MARK: Calls
+
+fn lower_pattern(variant: &Ident, fields: &[FieldModel], inputs: &[InputKind]) -> PatternIr {
     let bindings: Vec<Ident> = inputs
         .iter()
         .filter_map(|input| match input {
@@ -251,8 +509,8 @@ fn lower_pattern(state: &StateModel, inputs: &[InputKind]) -> PatternIr {
         .collect();
 
     PatternIr {
-        variant: state.variant.clone(),
-        has_rest: bindings.len() < state.fields.len(),
+        variant: variant.clone(),
+        has_rest: bindings.len() < fields.len(),
         bindings,
     }
 }
