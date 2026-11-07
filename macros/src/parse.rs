@@ -1,7 +1,7 @@
 //! Parse the arguments of `#[state_machine]` and of the item attributes it consumes.
 
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Expr, ExprLit, Ident, Lit, Meta, Token};
+use syn::{Attribute, Expr, ExprLit, Ident, Lit, Meta, Token, Type, parenthesized, token};
 
 // MARK: Errors
 
@@ -143,14 +143,143 @@ pub(crate) enum ItemAttribute {
 }
 
 /// The arguments of `#[state]`.
-pub(crate) struct StateArgs {}
+#[derive(Default)]
+pub(crate) struct StateArgs {
+    /// The name of the generated variant, replacing the one derived from the handler.
+    pub(crate) name: Option<Ident>,
+    /// The action to run when the state is entered.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run when the state is exited.
+    pub(crate) exit_action: Option<Ident>,
+    /// The extra local storage fields, in declaration order.
+    pub(crate) local_storage: Vec<(Ident, Type)>,
+}
+
+impl StateArgs {
+    /// The keys of `#[state]`.
+    const KEYS: &[&str] = &["name", "entry_action", "exit_action", "local_storage"];
+
+    /// Store the `key = value` argument `key`.
+    fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        if key == "local_storage" {
+            return Err(syn::Error::new_spanned(
+                key,
+                "`local_storage` takes a list, as in `local_storage(field: Type)`",
+            ));
+        }
+
+        let Expr::Path(path) = value else {
+            return Err(expected_identifier(value));
+        };
+
+        let Some(ident) = path.path.get_ident().cloned() else {
+            return Err(expected_identifier(value));
+        };
+
+        if key == "name" {
+            self.name = Some(ident);
+        } else if key == "entry_action" {
+            self.entry_action = Some(ident);
+        } else {
+            self.exit_action = Some(ident);
+        }
+
+        Ok(())
+    }
+}
 
 impl Parse for StateArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        parse_key_values(input, &[])?;
+        let mut arguments = Self::default();
+        let mut entries: Vec<(Ident, Expr)> = Vec::new();
+        let mut has_local_storage = false;
+        let mut errors = None;
 
-        Ok(Self {})
+        // A syntax error leaves the stream in an unknown position, so it ends the
+        // loop while keeping the errors found so far.
+        while !input.is_empty() {
+            if is_local_storage_list(input) {
+                match parse_local_storage(input) {
+                    Ok((key, _)) if has_local_storage => push_error(
+                        &mut errors,
+                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                    ),
+                    Ok((_, fields)) => {
+                        arguments.local_storage = fields;
+                        has_local_storage = true;
+                    }
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            let (key, value) = match parse_key_value(input) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_error(&mut errors, error);
+
+                    break;
+                }
+            };
+
+            let validated = validate_key_value(&key, &value, Self::KEYS, &entries)
+                .and_then(|()| arguments.set_key_value(&key, &value));
+
+            match validated {
+                Ok(()) => entries.push((key, value)),
+                Err(error) => push_error(&mut errors, error),
+            }
+        }
+
+        match errors {
+            Some(error) => Err(error),
+            None => Ok(arguments),
+        }
     }
+}
+
+fn expected_identifier(value: &Expr) -> syn::Error {
+    syn::Error::new_spanned(value, "expected an identifier")
+}
+
+/// Return whether the next argument in `input` is written `local_storage(...)`.
+fn is_local_storage_list(input: ParseStream<'_>) -> bool {
+    let fork = input.fork();
+
+    fork.parse::<Ident>()
+        .is_ok_and(|key| key == "local_storage")
+        && fork.peek(token::Paren)
+}
+
+/// Parse a `local_storage(field: Type, ...)` argument and the comma that follows it.
+fn parse_local_storage(input: ParseStream<'_>) -> syn::Result<(Ident, Vec<(Ident, Type)>)> {
+    let key: Ident = input.parse()?;
+    let content;
+
+    parenthesized!(content in input);
+
+    let fields = content.parse_terminated(parse_local_storage_field, Token![,])?;
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok((key, fields.into_iter().collect()))
+}
+
+fn parse_local_storage_field(input: ParseStream<'_>) -> syn::Result<(Ident, Type)> {
+    let name: Ident = input.parse()?;
+
+    input.parse::<Token![:]>()?;
+
+    let ty: Type = input.parse()?;
+
+    Ok((name, ty))
 }
 
 /// Parse `attribute` if it is an attribute of `sotu`.
@@ -178,7 +307,7 @@ pub(crate) fn parse_item_attribute(attribute: &Attribute) -> syn::Result<Option<
 
 fn parse_state_args(attribute: &Attribute) -> syn::Result<StateArgs> {
     match &attribute.meta {
-        Meta::Path(_) => Ok(StateArgs {}),
+        Meta::Path(_) => Ok(StateArgs::default()),
         Meta::List(list) => list.parse_args(),
         Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
             name_value,
@@ -255,6 +384,33 @@ mod tests {
             parse_item_attribute(&empty),
             Ok(Some(ItemAttribute::State(_)))
         ));
+    }
+
+    #[test]
+    fn state_arguments_read_every_key() {
+        let attribute: Attribute = parse_quote! {
+            #[state(
+                name = Lit,
+                entry_action = enter,
+                exit_action = leave,
+                local_storage(started: bool, count: u8)
+            )]
+        };
+
+        let Ok(Some(ItemAttribute::State(arguments))) = parse_item_attribute(&attribute) else {
+            panic!("the attribute should parse as a state");
+        };
+
+        let fields: Vec<String> = arguments
+            .local_storage
+            .iter()
+            .map(|(name, ty)| quote!(#name: #ty).to_string())
+            .collect();
+
+        assert!(arguments.name.is_some_and(|name| name == "Lit"));
+        assert!(arguments.entry_action.is_some_and(|name| name == "enter"));
+        assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
+        assert_eq!(fields, ["started : bool", "count : u8"]);
     }
 
     #[test]
