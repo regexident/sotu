@@ -21,6 +21,8 @@ pub(crate) struct Model {
     pub(crate) event_type: Type,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
+    /// The entry and exit actions in declaration order.
+    pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
 }
@@ -37,6 +39,10 @@ pub(crate) struct StateModel {
     pub(crate) inputs: Vec<InputKind>,
     /// The local storage fields: the handler's inputs, then the `local_storage` key.
     pub(crate) fields: Vec<FieldModel>,
+    /// The action to run when the state is entered.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run when the state is exited.
+    pub(crate) exit_action: Option<Ident>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
 }
@@ -51,7 +57,15 @@ pub(crate) struct FieldModel {
     pub(crate) default: Option<DefaultValue>,
 }
 
-/// What an input of a state handler receives.
+/// An entry or exit action of the machine.
+pub(crate) struct ActionModel {
+    /// The name of the action function.
+    pub(crate) name: Ident,
+    /// The classified inputs of the action, in declaration order.
+    pub(crate) inputs: Vec<InputKind>,
+}
+
+/// What an input of a handler or action receives.
 // Inputs live in short vectors for the duration of one macro expansion, so the
 // size of the largest variant does not justify boxing the syntax trees.
 #[allow(clippy::large_enum_variant)]
@@ -93,6 +107,7 @@ pub(crate) enum DefaultValue {
 pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result<Model> {
     let mut errors = None;
     let mut states = Vec::new();
+    let mut actions = Vec::new();
     let mut event_type = None;
 
     for impl_item in &mut item.items {
@@ -109,12 +124,24 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
                     &mut errors,
                 ));
             }
+            (ItemAttribute::Action, ImplItem::Fn(function)) => {
+                actions.push(analyze_action(function, &mut errors));
+            }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
                 syn::Error::new_spanned(&*impl_item, "`#[state]` can only be applied to functions"),
             ),
+            (ItemAttribute::Action, _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[action]` can only be applied to functions",
+                ),
+            ),
         }
     }
+
+    check_action_references(&states, &actions, &mut errors);
 
     let Some(initial) = arguments.initial else {
         let mut error = syn::Error::new(
@@ -138,6 +165,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         initial,
         event_type: event_type.unwrap_or_else(|| parse_quote!(())),
         states,
+        actions,
         item,
     })
 }
@@ -172,6 +200,26 @@ fn take_item_attribute(
     });
 
     taken
+}
+
+/// Report every `entry_action` and `exit_action` that names no `#[action]`.
+fn check_action_references(
+    states: &[StateModel],
+    actions: &[ActionModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let mut check = |reference: &Option<Ident>, message: &str| {
+        if let Some(name) = reference
+            && !actions.iter().any(|action| action.name == *name)
+        {
+            push_error(errors, syn::Error::new_spanned(name, message));
+        }
+    };
+
+    for state in states {
+        check(&state.entry_action, "entry action not found");
+        check(&state.exit_action, "exit action not found");
+    }
 }
 
 fn analyze_state(
@@ -245,10 +293,46 @@ fn analyze_state(
         constructor,
         inputs,
         fields,
+        entry_action: arguments.entry_action,
+        exit_action: arguments.exit_action,
         docs,
     }
 }
 
+fn analyze_action(function: &ImplItemFn, errors: &mut Option<syn::Error>) -> ActionModel {
+    let mut inputs = Vec::new();
+
+    for input in &function.sig.inputs {
+        match input {
+            FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
+            FnArg::Typed(typed) => match local_storage_input(typed) {
+                Some((name, ty, mutable)) => inputs.push(InputKind::LocalStorage {
+                    name,
+                    ty,
+                    mutable,
+                    default: None,
+                }),
+                None => push_error(
+                    errors,
+                    syn::Error::new_spanned(
+                        typed,
+                        "unsupported input; actions take a receiver and references to local \
+                         storage",
+                    ),
+                ),
+            },
+        }
+    }
+
+    ActionModel {
+        name: function.sig.ident.clone(),
+        inputs,
+    }
+}
+
+/// Return the field name, field type and mutability of the local storage input `typed`.
+///
+/// Returns `None` unless `typed` is a plain identifier bound to a reference.
 fn local_storage_input(typed: &PatType) -> Option<(Ident, Type, bool)> {
     let Pat::Ident(pattern) = &*typed.pat else {
         return None;
@@ -615,6 +699,31 @@ mod tests {
         assert_eq!(state.handler, ident("waiting"));
         assert_eq!(state.variant, ident("DoorOpen"));
         assert_eq!(state.constructor, ident("door_open"));
+    }
+
+    #[test]
+    fn unknown_entry_action_is_reported() {
+        let item: ItemImpl = parse_quote! {
+            impl Door {
+                #[state(entry_action = missing)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+
+                #[action]
+                fn present() {}
+            }
+        };
+
+        let message = match analyze(arguments(), item) {
+            Ok(_) => panic!("an unknown entry action should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            message.starts_with("entry action not found"),
+            "unexpected message: {message}"
+        );
     }
 
     #[test]

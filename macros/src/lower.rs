@@ -3,7 +3,7 @@
 use proc_macro2::Span;
 use syn::{Attribute, Expr, Ident, ItemImpl, Type, parse_quote};
 
-use crate::analyze::{DefaultValue, FieldModel, InputKind, Model, StateModel};
+use crate::analyze::{ActionModel, DefaultValue, FieldModel, InputKind, Model, StateModel};
 
 // MARK: Intermediate Representation
 
@@ -75,6 +75,10 @@ pub(crate) struct DispatchIr {
     pub(crate) event_parameter: Ident,
     /// One match arm per variant, in declaration order.
     pub(crate) arms: Vec<ArmIr>,
+    /// The body of `call_entry_action`, if any state has an entry action.
+    pub(crate) entry_actions: Option<ActionDispatchIr>,
+    /// The body of `call_exit_action`, if any state has an exit action.
+    pub(crate) exit_actions: Option<ActionDispatchIr>,
 }
 
 /// A match arm that calls one handler.
@@ -83,6 +87,22 @@ pub(crate) struct ArmIr {
     pub(crate) pattern: PatternIr,
     /// The call to the handler.
     pub(crate) call: CallIr,
+}
+
+/// The method that runs the entry or exit action of the active state.
+pub(crate) struct ActionDispatchIr {
+    /// The name of the shared storage parameter, underscored when unused.
+    pub(crate) shared_storage_parameter: Ident,
+    /// One match arm per variant, in declaration order.
+    pub(crate) arms: Vec<ActionArmIr>,
+}
+
+/// A match arm that runs the action of one state, if it has one.
+pub(crate) struct ActionArmIr {
+    /// The pattern the arm matches.
+    pub(crate) pattern: PatternIr,
+    /// The call to the action.
+    pub(crate) call: Option<CallIr>,
 }
 
 /// The pattern of one variant, binding only the fields a call takes.
@@ -137,6 +157,8 @@ pub(crate) fn lower(model: &Model) -> Ir {
             ),
             event_parameter: handler_parameter(model, &InputKind::Event, EVENT),
             arms: model.states.iter().map(lower_arm).collect(),
+            entry_actions: lower_action_dispatch(model, |state| state.entry_action.as_ref()),
+            exit_actions: lower_action_dispatch(model, |state| state.exit_action.as_ref()),
         },
     }
 }
@@ -167,6 +189,55 @@ fn lower_arm(state: &StateModel) -> ArmIr {
     ArmIr {
         pattern: lower_pattern(state, &state.inputs),
         call: lower_call(&state.handler, &state.inputs),
+    }
+}
+
+/// Lower the method that runs the action `attached` selects from each state.
+///
+/// Returns `None` when no state has such an action, which keeps the no-op
+/// default of the `State` trait.
+fn lower_action_dispatch(
+    model: &Model,
+    attached: fn(&StateModel) -> Option<&Ident>,
+) -> Option<ActionDispatchIr> {
+    let resolve = |state: &StateModel| -> Option<&ActionModel> {
+        let name = attached(state)?;
+
+        model.actions.iter().find(|action| action.name == *name)
+    };
+
+    if !model.states.iter().any(|state| attached(state).is_some()) {
+        return None;
+    }
+
+    let takes_receiver = model
+        .states
+        .iter()
+        .filter_map(resolve)
+        .any(|action| action.inputs.contains(&InputKind::Receiver));
+
+    let arms = model
+        .states
+        .iter()
+        .map(|state| lower_action_arm(state, resolve(state)))
+        .collect();
+
+    Some(ActionDispatchIr {
+        shared_storage_parameter: parameter(SHARED_STORAGE, takes_receiver),
+        arms,
+    })
+}
+
+fn lower_action_arm(state: &StateModel, action: Option<&ActionModel>) -> ActionArmIr {
+    match action {
+        Some(action) => ActionArmIr {
+            pattern: lower_pattern(state, &action.inputs),
+            call: Some(lower_call(&action.name, &action.inputs)),
+        },
+        None => ActionArmIr {
+            pattern: lower_pattern(state, &[]),
+            call: None,
+        },
     }
 }
 
