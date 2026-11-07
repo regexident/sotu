@@ -106,25 +106,56 @@ fn field_initializer(name: &Ident, value: Option<&Expr>) -> TokenStream {
 
 // MARK: Superstate Enum
 
-/// Return the tokens that name the superstate enum.
-fn superstate_type(ty: &SuperstateTypeIr) -> TokenStream {
+/// Return the tokens that name the superstate enum, using `lifetime` if it takes one.
+fn superstate_type(ty: &SuperstateTypeIr, lifetime: &TokenStream) -> TokenStream {
     let name = &ty.name;
 
-    quote!(#name)
+    if ty.has_lifetime {
+        quote!(#name<#lifetime>)
+    } else {
+        quote!(#name)
+    }
 }
 
 fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
-    let declared = superstate_type(&superstate.ty);
+    let declared = superstate_type(&superstate.ty, &quote!('sub));
+    let elided = superstate_type(&superstate.ty, &quote!('_));
+    let state = &superstate.state;
 
     let variants = superstate
         .variants
         .iter()
-        .map(|variant| enum_variant(&variant.docs, &variant.name, &[]));
+        .map(|variant| enum_variant(&variant.docs, &variant.name, &variant.fields));
+
+    let constructors: Vec<TokenStream> = superstate
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            let constructor = &variant.constructor;
+            let initial = variant.initial.as_ref()?;
+
+            Some(quote! {
+                pub fn #constructor() -> #state {
+                    #initial
+                }
+            })
+        })
+        .collect();
+
+    let constructor_impl = (!constructors.is_empty()).then(|| {
+        quote! {
+            impl #elided {
+                #(#constructors)*
+            }
+        }
+    });
 
     quote! {
         pub enum #declared {
             #(#variants,)*
         }
+
+        #constructor_impl
     }
 }
 
@@ -165,7 +196,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
     } = machine;
 
     let superstate = match superstate {
-        Some(ty) => superstate_type(ty),
+        Some(ty) => superstate_type(ty, &quote!('sub)),
         None => quote!(()),
     };
 
@@ -263,8 +294,9 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     } = superstate;
 
     let name = &ty.name;
-    let declared = superstate_type(ty);
-    let elided = superstate_type(ty);
+    let declared = superstate_type(ty, &quote!('sub));
+    let elided = superstate_type(ty, &quote!('_));
+    let impl_generics = ty.has_lifetime.then(|| quote!(<'sub>));
 
     let arms = arms
         .iter()
@@ -303,7 +335,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let different_variants = (variants.len() > 1).then(|| quote!(_ => false,));
 
     quote! {
-        impl ::sotu::blocking::Superstate<#shared_storage> for #declared {
+        impl #impl_generics ::sotu::blocking::Superstate<#shared_storage> for #declared {
             fn call_handler<'ctx, 'data: 'ctx>(
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
@@ -360,7 +392,7 @@ fn action_method(
 }
 
 fn parent_method(enum_name: &Ident, parents: &ParentDispatchIr) -> TokenStream {
-    let elided = superstate_type(&parents.superstate);
+    let elided = superstate_type(&parents.superstate, &quote!('_));
 
     let arms = parents
         .arms

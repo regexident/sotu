@@ -89,11 +89,16 @@ pub(crate) struct DispatchIr {
     pub(crate) parents: Option<ParentDispatchIr>,
 }
 
-/// The name of the superstate enum.
+/// The name of the superstate enum and whether it takes the lifetime `'sub`.
+///
+/// An enum without borrowed fields can not declare the lifetime, because an
+/// unused lifetime parameter is a compile error.
 #[derive(Clone)]
 pub(crate) struct SuperstateTypeIr {
     /// The name of the enum.
     pub(crate) name: Ident,
+    /// Whether any variant has a borrowed field.
+    pub(crate) has_lifetime: bool,
 }
 
 /// The generated superstate enum and the implementation of the blocking
@@ -129,6 +134,12 @@ pub(crate) struct SuperstateVariantIr {
     pub(crate) docs: Vec<Attribute>,
     /// The name of the variant.
     pub(crate) name: Ident,
+    /// The name of the `initial` constructor.
+    pub(crate) constructor: Ident,
+    /// The expression the `initial` constructor returns, if the superstate has one.
+    pub(crate) initial: Option<Expr>,
+    /// The borrowed fields in declaration order.
+    pub(crate) fields: Vec<FieldIr>,
 }
 
 /// A match arm that calls one handler.
@@ -308,6 +319,10 @@ fn lower_superstate_type(model: &Model) -> Option<SuperstateTypeIr> {
 
     Some(SuperstateTypeIr {
         name: Ident::new("Superstate", Span::call_site()),
+        has_lifetime: model
+            .superstates
+            .iter()
+            .any(|superstate| !superstate.fields.is_empty()),
     })
 }
 
@@ -336,7 +351,7 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
             .map(|superstate| {
                 lower_arm(
                     &superstate.variant,
-                    &[],
+                    &superstate.fields,
                     &superstate.handler,
                     &superstate.inputs,
                 )
@@ -355,6 +370,9 @@ fn lower_superstate_variant(superstate: &SuperstateModel) -> SuperstateVariantIr
     SuperstateVariantIr {
         docs: superstate.docs.clone(),
         name: superstate.variant.clone(),
+        constructor: superstate.constructor.clone(),
+        initial: superstate.initial.clone(),
+        fields: superstate.fields.iter().map(lower_field).collect(),
     }
 }
 
@@ -369,7 +387,7 @@ fn lower_state_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDis
             .map(|state| {
                 let parent = find_superstate(model, state.superstate.as_ref());
 
-                lower_parent_arm(&state.variant, &[], parent)
+                lower_parent_arm(&state.variant, &state.fields, parent, |_| None)
             })
             .collect(),
     }
@@ -384,7 +402,9 @@ fn lower_superstate_parents(model: &Model, superstate: SuperstateTypeIr) -> Pare
             .map(|child| {
                 let parent = find_superstate(model, child.superstate.as_ref());
 
-                lower_parent_arm(&child.variant, &[], parent)
+                lower_parent_arm(&child.variant, &child.fields, parent, |field| {
+                    Some(reborrow(field))
+                })
             })
             .collect(),
     }
@@ -406,8 +426,13 @@ fn lower_parent_arm(
     variant: &Ident,
     fields: &[FieldModel],
     parent: Option<&SuperstateModel>,
+    value: impl Fn(&FieldModel) -> Option<Expr>,
 ) -> ParentArmIr {
-    let bindings: Vec<Ident> = Vec::new();
+    let parent_fields = parent.map_or(&[][..], |parent| parent.fields.as_slice());
+    let bindings: Vec<Ident> = parent_fields
+        .iter()
+        .map(|field| field.name.clone())
+        .collect();
 
     ParentArmIr {
         pattern: PatternIr {
@@ -417,8 +442,31 @@ fn lower_parent_arm(
         },
         parent: parent.map(|parent| ParentIr {
             variant: parent.variant.clone(),
-            fields: Vec::new(),
+            fields: parent_fields
+                .iter()
+                .map(|field| ParentFieldIr {
+                    name: field.name.clone(),
+                    value: value(field),
+                })
+                .collect(),
         }),
+    }
+}
+
+/// Return the expression that reborrows the child's binding of the parent field `field`.
+///
+/// The binding is a reference to the child's own reference, so the parent's
+/// borrow lasts as long as the borrow of the child. The mutability follows the
+/// parent, which may borrow a field only for reading while its child borrows it
+/// mutably.
+fn reborrow(field: &FieldModel) -> Expr {
+    let name = &field.name;
+
+    match &field.ty {
+        Type::Reference(reference) if reference.mutability.is_none() => {
+            parse_quote!(&**#name)
+        }
+        _ => parse_quote!(&mut **#name),
     }
 }
 
@@ -443,7 +491,7 @@ fn lower_superstate_actions(
 ) -> Option<ActionDispatchIr> {
     let nodes = model.superstates.iter().map(|superstate| ActionNode {
         variant: &superstate.variant,
-        fields: &[],
+        fields: &superstate.fields,
         action: attached(superstate),
     });
 
