@@ -42,3 +42,68 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
+
+/// Mark a function as a state handler inside a `#[state_machine]` impl block.
+///
+/// The enclosing `#[state_machine]` attribute interprets the arguments and
+/// removes this attribute from its output. Outside such a block this attribute
+/// has no effect: it ignores its arguments and returns the item unchanged.
+#[proc_macro_attribute]
+pub fn state(
+    _arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
+
+/// Mark a function as a superstate handler inside a `#[state_machine]` impl block.
+///
+/// The enclosing `#[state_machine]` attribute interprets the arguments and
+/// removes this attribute from its output. Outside such a block this attribute
+/// has no effect: it ignores its arguments and returns the item unchanged.
+#[proc_macro_attribute]
+pub fn superstate(
+    _arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
+
+/// Mark an item as a mounted submachine inside a `#[state_machine]` impl block.
+///
+/// The enclosing `#[state_machine]` attribute interprets the arguments and
+/// removes this attribute from its output. Outside such a block this attribute
+/// has no effect: it ignores its arguments and returns the item unchanged.
+#[proc_macro_attribute]
+pub fn submachine(
+    _arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
+
+/// Mark a function as an entry or exit action inside a `#[state_machine]` impl block.
+///
+/// The enclosing `#[state_machine]` attribute interprets the arguments and
+/// removes this attribute from its output. Outside such a block this attribute
+/// has no effect: it ignores its arguments and returns the item unchanged.
+#[proc_macro_attribute]
+pub fn action(
+    _arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
+
+/// Mark a function as a submachine exit handler inside a `#[state_machine]` impl block.
+///
+/// The enclosing `#[state_machine]` attribute interprets the arguments and
+/// removes this attribute from its output. Outside such a block this attribute
+/// has no effect: it ignores its arguments and returns the item unchanged.
+#[proc_macro_attribute]
+pub fn exit_handler(
+    _arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    item
+}
