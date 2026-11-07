@@ -11,3 +11,10 @@ mod event {
             .expect_fail();
     }
 }
+
+mod state {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/state/pass/**/*.rs"]).and_check();
+    }
+}
