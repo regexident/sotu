@@ -172,6 +172,10 @@ pub(crate) struct SuperstateArgs {
     pub(crate) entry_action: Option<Ident>,
     /// The action to run when the superstate is exited.
     pub(crate) exit_action: Option<Ident>,
+    /// The state expression that the generated `initial` constructor returns.
+    pub(crate) initial: Option<Expr>,
+    /// The extra borrowed fields, in declaration order.
+    pub(crate) local_storage: Vec<(Ident, Type)>,
 }
 
 impl StateArgs {
@@ -218,10 +222,23 @@ impl Parse for StateArgs {
 
 impl SuperstateArgs {
     /// The keys of `#[superstate]`.
-    const KEYS: &[&str] = &["name", "superstate", "entry_action", "exit_action"];
+    const KEYS: &[&str] = &[
+        "name",
+        "superstate",
+        "entry_action",
+        "exit_action",
+        "initial",
+        "local_storage",
+    ];
 
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        if key == "initial" {
+            self.initial = Some(value.clone());
+
+            return Ok(());
+        }
+
         let ident = ident_value(value)?;
 
         if key == "name" {
@@ -242,9 +259,11 @@ impl Parse for SuperstateArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut arguments = Self::default();
 
-        parse_node_arguments(input, Self::KEYS, |key, value| {
+        let local_storage = parse_node_arguments(input, Self::KEYS, |key, value| {
             arguments.set_key_value(key, value)
         })?;
+
+        arguments.local_storage = local_storage;
 
         Ok(arguments)
     }
@@ -522,7 +541,14 @@ mod tests {
     #[test]
     fn superstate_arguments_read_every_key() {
         let attribute: Attribute = parse_quote! {
-            #[superstate(name = Lit, superstate = outer, entry_action = enter, exit_action = leave)]
+            #[superstate(
+                name = Lit,
+                superstate = outer,
+                entry_action = enter,
+                exit_action = leave,
+                initial = State::on(0),
+                local_storage(started: &'sub mut bool, count: &'sub u8)
+            )]
         };
 
         let Ok(Some(ItemAttribute::Superstate(arguments))) = parse_item_attribute(&attribute)
@@ -530,10 +556,20 @@ mod tests {
             panic!("the attribute should parse as a superstate");
         };
 
+        let initial = arguments.initial;
+
+        let fields: Vec<String> = arguments
+            .local_storage
+            .iter()
+            .map(|(name, ty)| quote!(#name: #ty).to_string())
+            .collect();
+
         assert!(arguments.name.is_some_and(|name| name == "Lit"));
         assert!(arguments.superstate.is_some_and(|name| name == "outer"));
         assert!(arguments.entry_action.is_some_and(|name| name == "enter"));
         assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
+        assert_eq!(quote!(#initial).to_string(), "State :: on (0)");
+        assert_eq!(fields, ["started : & 'sub mut bool", "count : & 'sub u8"]);
     }
 
     #[test]

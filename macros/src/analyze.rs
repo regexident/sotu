@@ -59,14 +59,21 @@ pub(crate) struct SuperstateModel {
     pub(crate) handler: Ident,
     /// The name of the generated enum variant.
     pub(crate) variant: Ident,
+    /// The name of the generated `initial` constructor.
+    pub(crate) constructor: Ident,
     /// The handler name of the enclosing superstate.
     pub(crate) superstate: Option<Ident>,
     /// The classified inputs of the handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
+    /// The borrowed fields, such as `&'sub mut u32`: the handler's inputs, then
+    /// the `local_storage` key.
+    pub(crate) fields: Vec<FieldModel>,
     /// The action to run when the superstate is entered.
     pub(crate) entry_action: Option<Ident>,
     /// The action to run when the superstate is exited.
     pub(crate) exit_action: Option<Ident>,
+    /// The state expression that the generated `initial` constructor returns.
+    pub(crate) initial: Option<Expr>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
 }
@@ -366,18 +373,59 @@ fn analyze_superstate(
 ) -> SuperstateModel {
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
+    let constructor = snake_case(&variant);
     let inputs = handler_inputs(function, false, event_type, errors);
+
+    let mut fields: Vec<FieldModel> = inputs.iter().filter_map(borrowed_field).collect();
+
+    fields.extend(
+        arguments
+            .local_storage
+            .into_iter()
+            .map(|(name, ty)| FieldModel {
+                name,
+                ty,
+                default: None,
+            }),
+    );
+
     let docs = handler_docs(function);
 
     SuperstateModel {
         handler,
         variant,
+        constructor,
         superstate: arguments.superstate,
         inputs,
+        fields,
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
+        initial: arguments.initial,
         docs,
     }
+}
+
+/// Return the field through which a superstate borrows the input `input`, if it
+/// is local storage.
+fn borrowed_field(input: &InputKind) -> Option<FieldModel> {
+    let InputKind::LocalStorage {
+        name, ty, mutable, ..
+    } = input
+    else {
+        return None;
+    };
+
+    let ty: Type = if *mutable {
+        parse_quote!(&'sub mut #ty)
+    } else {
+        parse_quote!(&'sub #ty)
+    };
+
+    Some(FieldModel {
+        name: name.clone(),
+        ty,
+        default: None,
+    })
 }
 
 fn handler_docs(function: &ImplItemFn) -> Vec<Attribute> {
@@ -853,6 +901,27 @@ mod tests {
             message.starts_with("entry action not found"),
             "unexpected message: {message}"
         );
+    }
+
+    #[test]
+    fn superstate_inputs_become_borrowed_fields() {
+        let model = model(parse_quote! {
+            impl Counter {
+                #[superstate]
+                fn blinking(counter: &mut u32, event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let [field] = model.superstates[0].fields.as_slice() else {
+            panic!("the superstate should have one field");
+        };
+
+        let field_type = &field.ty;
+
+        assert_eq!(field.name, ident("counter"));
+        assert_eq!(quote!(#field_type).to_string(), "& 'sub mut u32");
     }
 
     #[test]
