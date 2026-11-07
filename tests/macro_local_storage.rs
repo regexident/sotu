@@ -24,7 +24,11 @@ mod lamp {
 
     #[state_machine(initial = State::on(0, false))]
     impl Lamp {
-        #[state(local_storage(started: bool))]
+        #[state(
+            entry_action = enter_on,
+            exit_action = leave_on,
+            local_storage(started: bool)
+        )]
         fn on(counter: &mut u32, #[default] lit: &mut bool, event: &Event) -> Outcome<State> {
             match event {
                 Event::Tick(_) => {
@@ -37,12 +41,30 @@ mod lamp {
             }
         }
 
-        #[state]
+        #[state(entry_action = enter_off)]
         fn off(event: &Event) -> Outcome<State> {
             match event {
                 Event::Tick(_) | Event::Reset(_) => Handled,
                 Event::Toggle(_) => Transition(State::on(0, false)),
             }
+        }
+
+        #[action]
+        fn enter_on(&mut self, lit: &mut bool) {
+            *lit = true;
+            self.log.push("enter on");
+        }
+
+        #[action]
+        fn leave_on(&mut self, counter: &mut u32) {
+            *counter += 100;
+            self.exited_counter = Some(*counter);
+            self.log.push("leave on");
+        }
+
+        #[action]
+        fn enter_off(&mut self) {
+            self.log.push("enter off");
         }
     }
 }
@@ -67,7 +89,7 @@ mod door {
 }
 
 use door::Door;
-use lamp::{Lamp, Tick};
+use lamp::{Lamp, Reset, Tick, Toggle};
 
 #[test]
 fn constructor_omits_defaulted_fields() {
@@ -93,33 +115,35 @@ fn handlers_receive_local_storage() {
 
     assert!(matches!(
         machine.state(),
-        lamp::State::On {
-            counter: 0,
-            lit: false,
-            ..
-        }
+        lamp::State::On { counter: 3, .. }
     ));
 }
 
 #[test]
-fn local_storage_is_written_by_the_handler() {
+fn entry_and_exit_actions_run_in_order() {
     let mut machine = Lamp::default().state_machine();
 
-    let lamp::State::On { lit, .. } = machine.state_mut() else {
-        panic!("the lamp should be on");
-    };
+    machine.handle(Toggle, &mut ());
 
-    *lit = true;
+    assert_eq!(machine.log, ["enter on", "leave on", "enter off"]);
+}
+
+#[test]
+fn exit_action_changes_do_not_reach_target() {
+    let mut machine = Lamp::default().state_machine();
 
     machine.handle(Tick, &mut ());
+    machine.handle(Reset, &mut ());
 
-    let lamp::State::On { counter, .. } = machine.state() else {
-        panic!("the lamp should be on");
-    };
-
-    assert_eq!(*counter, 1);
-    assert!(machine.log.is_empty());
-    assert!(machine.exited_counter.is_none());
+    assert_eq!(machine.exited_counter, Some(101));
+    assert!(matches!(
+        machine.state(),
+        lamp::State::On {
+            counter: 0,
+            lit: true,
+            ..
+        }
+    ));
 }
 
 #[test]
