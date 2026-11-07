@@ -18,3 +18,10 @@ mod state {
         tryexpand::expand(["tests/expand-tests/state/pass/**/*.rs"]).and_check();
     }
 }
+
+mod action {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/action/pass/**/*.rs"]).and_check();
+    }
+}
