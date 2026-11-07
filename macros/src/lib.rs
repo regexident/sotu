@@ -5,6 +5,7 @@
 
 mod analyze;
 mod event_derive;
+mod lower;
 mod parse;
 
 /// Derive the `From`, `Variant` and `SubEvent` implementations of an event enum.
