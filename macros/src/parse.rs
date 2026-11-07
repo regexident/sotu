@@ -140,6 +140,8 @@ impl Parse for MachineArgs {
 pub(crate) enum ItemAttribute {
     /// The item is a state handler.
     State(StateArgs),
+    /// The item is a superstate handler.
+    Superstate(SuperstateArgs),
     /// The item is an entry or exit action.
     Action,
 }
@@ -149,6 +151,8 @@ pub(crate) enum ItemAttribute {
 pub(crate) struct StateArgs {
     /// The name of the generated variant, replacing the one derived from the handler.
     pub(crate) name: Option<Ident>,
+    /// The handler name of the enclosing superstate.
+    pub(crate) superstate: Option<Ident>,
     /// The action to run when the state is entered.
     pub(crate) entry_action: Option<Ident>,
     /// The action to run when the state is exited.
@@ -157,29 +161,37 @@ pub(crate) struct StateArgs {
     pub(crate) local_storage: Vec<(Ident, Type)>,
 }
 
+/// The arguments of `#[superstate]`.
+#[derive(Default)]
+pub(crate) struct SuperstateArgs {
+    /// The name of the generated variant, replacing the one derived from the handler.
+    pub(crate) name: Option<Ident>,
+    /// The handler name of the enclosing superstate.
+    pub(crate) superstate: Option<Ident>,
+    /// The action to run when the superstate is entered.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run when the superstate is exited.
+    pub(crate) exit_action: Option<Ident>,
+}
+
 impl StateArgs {
     /// The keys of `#[state]`.
-    const KEYS: &[&str] = &["name", "entry_action", "exit_action", "local_storage"];
+    const KEYS: &[&str] = &[
+        "name",
+        "superstate",
+        "entry_action",
+        "exit_action",
+        "local_storage",
+    ];
 
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
-        if key == "local_storage" {
-            return Err(syn::Error::new_spanned(
-                key,
-                "`local_storage` takes a list, as in `local_storage(field: Type)`",
-            ));
-        }
-
-        let Expr::Path(path) = value else {
-            return Err(expected_identifier(value));
-        };
-
-        let Some(ident) = path.path.get_ident().cloned() else {
-            return Err(expected_identifier(value));
-        };
+        let ident = ident_value(value)?;
 
         if key == "name" {
             self.name = Some(ident);
+        } else if key == "superstate" {
+            self.superstate = Some(ident);
         } else if key == "entry_action" {
             self.entry_action = Some(ident);
         } else {
@@ -193,60 +205,125 @@ impl StateArgs {
 impl Parse for StateArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut arguments = Self::default();
-        let mut entries: Vec<(Ident, Expr)> = Vec::new();
-        let mut has_local_storage = false;
-        let mut errors = None;
 
-        // A syntax error leaves the stream in an unknown position, so it ends the
-        // loop while keeping the errors found so far.
-        while !input.is_empty() {
-            if is_local_storage_list(input) {
-                match parse_local_storage(input) {
-                    Ok((key, _)) if has_local_storage => push_error(
-                        &mut errors,
-                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
-                    ),
-                    Ok((_, fields)) => {
-                        arguments.local_storage = fields;
-                        has_local_storage = true;
-                    }
-                    Err(error) => {
-                        push_error(&mut errors, error);
+        let local_storage = parse_node_arguments(input, Self::KEYS, |key, value| {
+            arguments.set_key_value(key, value)
+        })?;
 
-                        break;
-                    }
-                }
+        arguments.local_storage = local_storage;
 
-                continue;
-            }
+        Ok(arguments)
+    }
+}
 
-            let (key, value) = match parse_key_value(input) {
-                Ok(entry) => entry,
+impl SuperstateArgs {
+    /// The keys of `#[superstate]`.
+    const KEYS: &[&str] = &["name", "superstate", "entry_action", "exit_action"];
+
+    /// Store the `key = value` argument `key`.
+    fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        let ident = ident_value(value)?;
+
+        if key == "name" {
+            self.name = Some(ident);
+        } else if key == "superstate" {
+            self.superstate = Some(ident);
+        } else if key == "entry_action" {
+            self.entry_action = Some(ident);
+        } else {
+            self.exit_action = Some(ident);
+        }
+
+        Ok(())
+    }
+}
+
+impl Parse for SuperstateArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut arguments = Self::default();
+
+        parse_node_arguments(input, Self::KEYS, |key, value| {
+            arguments.set_key_value(key, value)
+        })?;
+
+        Ok(arguments)
+    }
+}
+
+/// Parse the arguments of a node attribute, handing each `key = value` to `set`.
+///
+/// Returns the fields of the `local_storage(...)` argument. Every unknown key,
+/// duplicate key and quoted value is reported in one combined error.
+fn parse_node_arguments(
+    input: ParseStream<'_>,
+    keys: &[&str],
+    mut set: impl FnMut(&Ident, &Expr) -> syn::Result<()>,
+) -> syn::Result<Vec<(Ident, Type)>> {
+    let mut local_storage = None;
+    let mut entries: Vec<(Ident, Expr)> = Vec::new();
+    let mut errors = None;
+
+    // A syntax error leaves the stream in an unknown position, so it ends the
+    // loop while keeping the errors found so far.
+    while !input.is_empty() {
+        if is_local_storage_list(input) {
+            match parse_local_storage(input) {
+                Ok((key, _)) if local_storage.is_some() => push_error(
+                    &mut errors,
+                    syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                ),
+                Ok((_, fields)) => local_storage = Some(fields),
                 Err(error) => {
                     push_error(&mut errors, error);
 
                     break;
                 }
-            };
-
-            let validated = validate_key_value(&key, &value, Self::KEYS, &entries)
-                .and_then(|()| arguments.set_key_value(&key, &value));
-
-            match validated {
-                Ok(()) => entries.push((key, value)),
-                Err(error) => push_error(&mut errors, error),
             }
+
+            continue;
         }
 
-        match errors {
-            Some(error) => Err(error),
-            None => Ok(arguments),
+        let (key, value) = match parse_key_value(input) {
+            Ok(entry) => entry,
+            Err(error) => {
+                push_error(&mut errors, error);
+
+                break;
+            }
+        };
+
+        let validated = validate_key_value(&key, &value, keys, &entries).and_then(|()| {
+            if key == "local_storage" {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    "`local_storage` takes a list, as in `local_storage(field: Type)`",
+                ));
+            }
+
+            set(&key, &value)
+        });
+
+        match validated {
+            Ok(()) => entries.push((key, value)),
+            Err(error) => push_error(&mut errors, error),
         }
+    }
+
+    match errors {
+        Some(error) => Err(error),
+        None => Ok(local_storage.unwrap_or_default()),
     }
 }
 
-fn expected_identifier(value: &Expr) -> syn::Error {
-    syn::Error::new_spanned(value, "expected an identifier")
+/// Return the identifier written as `value`.
+fn ident_value(value: &Expr) -> syn::Result<Ident> {
+    if let Expr::Path(path) = value
+        && let Some(ident) = path.path.get_ident()
+    {
+        return Ok(ident.clone());
+    }
+
+    Err(syn::Error::new_spanned(value, "expected an identifier"))
 }
 
 /// Return whether the next argument in `input` is written `local_storage(...)`.
@@ -299,8 +376,10 @@ pub(crate) fn parse_item_attribute(attribute: &Attribute) -> syn::Result<Option<
         "state" => {
             parse_state_args(attribute).map(|arguments| Some(ItemAttribute::State(arguments)))
         }
+        "superstate" => parse_superstate_args(attribute)
+            .map(|arguments| Some(ItemAttribute::Superstate(arguments))),
         "action" => parse_action_args(attribute).map(|()| Some(ItemAttribute::Action)),
-        "superstate" | "submachine" | "exit_handler" => Err(syn::Error::new_spanned(
+        "submachine" | "exit_handler" => Err(syn::Error::new_spanned(
             attribute,
             format!("`#[{name}]` is not supported here"),
         )),
@@ -315,6 +394,17 @@ fn parse_state_args(attribute: &Attribute) -> syn::Result<StateArgs> {
         Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
             name_value,
             "`#[state]` takes no value",
+        )),
+    }
+}
+
+fn parse_superstate_args(attribute: &Attribute) -> syn::Result<SuperstateArgs> {
+    match &attribute.meta {
+        Meta::Path(_) => Ok(SuperstateArgs::default()),
+        Meta::List(list) => list.parse_args(),
+        Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
+            name_value,
+            "`#[superstate]` takes no value",
         )),
     }
 }
@@ -427,6 +517,23 @@ mod tests {
         assert!(arguments.entry_action.is_some_and(|name| name == "enter"));
         assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
         assert_eq!(fields, ["started : bool", "count : u8"]);
+    }
+
+    #[test]
+    fn superstate_arguments_read_every_key() {
+        let attribute: Attribute = parse_quote! {
+            #[superstate(name = Lit, superstate = outer, entry_action = enter, exit_action = leave)]
+        };
+
+        let Ok(Some(ItemAttribute::Superstate(arguments))) = parse_item_attribute(&attribute)
+        else {
+            panic!("the attribute should parse as a superstate");
+        };
+
+        assert!(arguments.name.is_some_and(|name| name == "Lit"));
+        assert!(arguments.superstate.is_some_and(|name| name == "outer"));
+        assert!(arguments.entry_action.is_some_and(|name| name == "enter"));
+        assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
     }
 
     #[test]
