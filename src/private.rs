@@ -81,6 +81,43 @@ impl<S, X> NodeOutcome<S, X> {
     }
 }
 
+/// The mode-neutral view of a generated machine.
+///
+/// Parent code names a child's types through this trait, as in
+/// `<C as Submachine>::State`, regardless of the mode of either machine.
+pub trait Submachine: Sized {
+    /// The event type handled by the machine.
+    type Event;
+
+    /// The context handed to every handler, entry action and exit action.
+    type Context<'ctx, 'data: 'ctx>;
+
+    /// The leaf states of the machine.
+    type State;
+
+    /// The superstates of the machine, borrowing local storage from the active
+    /// leaf state for `'sub`.
+    type Superstate<'sub>
+    where
+        Self::State: 'sub;
+
+    /// The exit points through which the machine can be left.
+    type Exit;
+
+    /// Return the state the machine starts in.
+    fn initial() -> Self::State;
+}
+
+/// Marker for generated machines that run in blocking mode.
+///
+/// A blocking parent requires this trait of its children, so its diagnostic is
+/// the one a user sees when mounting an awaitable child.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is an awaitable state machine and can not be mounted in a blocking one",
+    note = "add `awaitable` to the parent's `#[state_machine]`"
+)]
+pub trait BlockingSubmachine: Submachine + crate::blocking::IntoStateMachine {}
+
 /// A [`NodeOutcome`] together with the event it was produced for.
 ///
 /// Dispatch hooks take the event by value so that mount boundaries can move it
