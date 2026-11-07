@@ -47,6 +47,94 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
         .into()
 }
 
+/// Generate a state machine from an impl block of state handlers.
+///
+/// Functions marked with `#[state]` become the leaf states of the machine. Each
+/// handler produces a variant of a generated `State` enum, named with the
+/// PascalCase form of the handler name, and a constructor that keeps the
+/// handler's snake_case name. Variants keep the declaration order, and the
+/// handler's doc comments are copied to its variant. The macro also implements
+/// `sotu::blocking::IntoStateMachine` and `sotu::blocking::State`, so the storage
+/// type can be turned into a running machine.
+///
+/// The argument `initial` is required and takes tokens, not a string literal: it
+/// is the expression that builds the state the machine starts in.
+///
+/// A handler takes an optional receiver, which is the shared storage, and an
+/// optional input named `event`. The type behind the `event` reference is the
+/// event type of the machine. It is `()` when no handler takes an event, which
+/// makes the machine usable through `step`. A handler's attributes other than
+/// the ones of `sotu` stay on the function.
+///
+/// Invalid arguments are reported on their own as a compile error, without the
+/// impl block being examined. Once the arguments parse, the errors found in the
+/// impl block are combined into one compile error, along with a missing
+/// `initial`. A handler with an invalid `#[state(...)]` attribute reports that
+/// attribute, and its inputs are not checked.
+///
+/// # Examples
+///
+/// ```ignore
+/// use sotu::prelude::*;
+///
+/// #[derive(Default)]
+/// struct Switch {
+///     flips: u32,
+/// }
+///
+/// struct Flip;
+///
+/// #[derive(Event)]
+/// enum Event {
+///     Flip(Flip),
+/// }
+///
+/// #[state_machine(initial = State::off())]
+/// impl Switch {
+///     /// The switch is off.
+///     #[state]
+///     fn off(&mut self, event: &Event) -> Outcome<State> {
+///         match event {
+///             Event::Flip(_) => {
+///                 self.flips += 1;
+///
+///                 Transition(State::on())
+///             }
+///         }
+///     }
+///
+///     /// The switch is on.
+///     #[state]
+///     fn on(event: &Event) -> Outcome<State> {
+///         match event {
+///             Event::Flip(_) => Transition(State::off()),
+///         }
+///     }
+/// }
+///
+/// let mut machine = Switch::default().state_machine();
+///
+/// machine.handle(Flip, &mut ());
+///
+/// assert_eq!(machine.flips, 1);
+/// ```
+///
+/// Doc tests of a procedural macro crate cannot depend on `sotu`, which depends
+/// on this crate, so the example above is not compiled here.
+#[proc_macro_attribute]
+pub fn state_machine(
+    arguments: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    let arguments = syn::parse_macro_input!(arguments as parse::MachineArgs);
+    let item = syn::parse_macro_input!(item as syn::ItemImpl);
+
+    analyze::analyze(arguments, item)
+        .map(|model| codegen::generate(&lower::lower(&model)))
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 /// Mark a function as a state handler inside a `#[state_machine]` impl block.
 ///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
