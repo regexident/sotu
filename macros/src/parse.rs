@@ -140,6 +140,8 @@ impl Parse for MachineArgs {
 pub(crate) enum ItemAttribute {
     /// The item is a state handler.
     State(StateArgs),
+    /// The item is an entry or exit action.
+    Action,
 }
 
 /// The arguments of `#[state]`.
@@ -297,7 +299,8 @@ pub(crate) fn parse_item_attribute(attribute: &Attribute) -> syn::Result<Option<
         "state" => {
             parse_state_args(attribute).map(|arguments| Some(ItemAttribute::State(arguments)))
         }
-        "superstate" | "submachine" | "action" | "exit_handler" => Err(syn::Error::new_spanned(
+        "action" => parse_action_args(attribute).map(|()| Some(ItemAttribute::Action)),
+        "superstate" | "submachine" | "exit_handler" => Err(syn::Error::new_spanned(
             attribute,
             format!("`#[{name}]` is not supported here"),
         )),
@@ -312,6 +315,19 @@ fn parse_state_args(attribute: &Attribute) -> syn::Result<StateArgs> {
         Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
             name_value,
             "`#[state]` takes no value",
+        )),
+    }
+}
+
+fn parse_action_args(attribute: &Attribute) -> syn::Result<()> {
+    match &attribute.meta {
+        Meta::Path(_) => Ok(()),
+        Meta::List(list) => list
+            .parse_args_with(|input: ParseStream<'_>| parse_key_values(input, &[]))
+            .map(|_| ()),
+        Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
+            name_value,
+            "`#[action]` takes no value",
         )),
     }
 }
@@ -411,6 +427,16 @@ mod tests {
         assert!(arguments.entry_action.is_some_and(|name| name == "enter"));
         assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
         assert_eq!(fields, ["started : bool", "count : u8"]);
+    }
+
+    #[test]
+    fn action_attribute_accepts_no_arguments() {
+        let attribute: Attribute = parse_quote!(#[action]);
+
+        assert!(matches!(
+            parse_item_attribute(&attribute),
+            Ok(Some(ItemAttribute::Action))
+        ));
     }
 
     #[test]

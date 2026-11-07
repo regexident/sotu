@@ -1,9 +1,12 @@
 //! Turn the lowered machine into tokens.
 
-use proc_macro2::TokenStream;
-use quote::quote;
+use proc_macro2::{Ident, TokenStream};
+use quote::{format_ident, quote};
 
-use crate::lower::{ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, PatternIr, StateEnumIr};
+use crate::lower::{
+    ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, PatternIr,
+    StateEnumIr,
+};
 
 // MARK: Generation
 
@@ -146,9 +149,19 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         shared_storage_parameter,
         event_parameter,
         arms,
+        entry_actions,
+        exit_actions,
     } = dispatch;
 
     let arms = arms.iter().map(|arm| dispatch_arm(dispatch, arm));
+
+    let entry_action = entry_actions
+        .as_ref()
+        .map(|actions| action_method(dispatch, &format_ident!("call_entry_action"), actions));
+
+    let exit_action = exit_actions
+        .as_ref()
+        .map(|actions| action_method(dispatch, &format_ident!("call_exit_action"), actions));
 
     quote! {
         impl ::sotu::blocking::State<#shared_storage> for #state {
@@ -162,6 +175,28 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
                     #(#arms)*
                 }
             }
+
+            #entry_action
+
+            #exit_action
+        }
+    }
+}
+
+fn action_method(dispatch: &DispatchIr, method: &Ident, actions: &ActionDispatchIr) -> TokenStream {
+    let shared_storage = &dispatch.shared_storage;
+    let shared_storage_parameter = &actions.shared_storage_parameter;
+    let arms = actions.arms.iter().map(|arm| action_arm(dispatch, arm));
+
+    quote! {
+        fn #method<'ctx, 'data: 'ctx>(
+            &mut self,
+            #shared_storage_parameter: &mut #shared_storage,
+            _context: &mut (),
+        ) {
+            match self {
+                #(#arms)*
+            }
         }
     }
 }
@@ -172,6 +207,23 @@ fn dispatch_arm(dispatch: &DispatchIr, arm: &ArmIr) -> TokenStream {
 
     quote! {
         #pattern => #call,
+    }
+}
+
+fn action_arm(dispatch: &DispatchIr, arm: &ActionArmIr) -> TokenStream {
+    let pattern = pattern(dispatch, &arm.pattern);
+
+    match &arm.call {
+        Some(action) => {
+            let call = call(dispatch, action);
+
+            quote! {
+                #pattern => #call,
+            }
+        }
+        None => quote! {
+            #pattern => {}
+        },
     }
 }
 
