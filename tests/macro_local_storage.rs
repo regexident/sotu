@@ -47,6 +47,26 @@ mod lamp {
     }
 }
 
+mod door {
+    use sotu::prelude::*;
+
+    #[derive(Default)]
+    pub struct Door {
+        pub ticks: u32,
+    }
+
+    #[state_machine(initial = State::idle())]
+    impl Door {
+        #[state(name = Idle)]
+        fn waiting(&mut self) -> Outcome<State> {
+            self.ticks += 1;
+
+            Handled
+        }
+    }
+}
+
+use door::Door;
 use lamp::{Lamp, Tick};
 
 #[test]
@@ -100,4 +120,16 @@ fn local_storage_is_written_by_the_handler() {
     assert_eq!(*counter, 1);
     assert!(machine.log.is_empty());
     assert!(machine.exited_counter.is_none());
+}
+
+#[test]
+fn renamed_state_uses_new_name() {
+    let mut machine = Door::default().state_machine();
+
+    assert!(matches!(door::State::idle(), door::State::Idle {}));
+
+    machine.step(&mut ());
+
+    assert_eq!(machine.ticks, 1);
+    assert!(matches!(machine.state(), door::State::Idle {}));
 }

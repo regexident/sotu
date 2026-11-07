@@ -181,7 +181,7 @@ fn analyze_state(
     errors: &mut Option<syn::Error>,
 ) -> StateModel {
     let handler = function.sig.ident.clone();
-    let variant = pascal_case(&handler);
+    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
     let mut inputs = Vec::new();
 
@@ -597,6 +597,24 @@ mod tests {
             .collect();
 
         assert_eq!(fields, ["counter", "lit", "started"]);
+    }
+
+    #[test]
+    fn name_override_sets_variant_and_constructor() {
+        let model = model(parse_quote! {
+            impl Door {
+                #[state(name = DoorOpen)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let state = &model.states[0];
+
+        assert_eq!(state.handler, ident("waiting"));
+        assert_eq!(state.variant, ident("DoorOpen"));
+        assert_eq!(state.constructor, ident("door_open"));
     }
 
     #[test]
