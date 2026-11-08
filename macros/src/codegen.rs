@@ -185,6 +185,8 @@ fn hook_methods(machine: &MachineIr) -> TokenStream {
     let HooksModel {
         before_dispatch,
         after_dispatch,
+        before_transition,
+        after_transition,
     } = &machine.hooks;
 
     let before_dispatch = before_dispatch
@@ -195,10 +197,22 @@ fn hook_methods(machine: &MachineIr) -> TokenStream {
         .as_ref()
         .map(|path| dispatch_hook(machine, &format_ident!("after_dispatch"), path));
 
+    let before_transition = before_transition
+        .as_ref()
+        .map(|path| transition_hook(machine, &format_ident!("before_transition"), path));
+
+    let after_transition = after_transition
+        .as_ref()
+        .map(|path| transition_hook(machine, &format_ident!("after_transition"), path));
+
     quote! {
         #before_dispatch
 
         #after_dispatch
+
+        #before_transition
+
+        #after_transition
     }
 }
 
@@ -224,6 +238,31 @@ fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStrea
             context: &mut #context_type,
         ) {
             ::sotu::blocking::DispatchHook::call_dispatch_hook(&(#path), self, node, event, context)
+        }
+    }
+}
+
+fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStream {
+    let MachineIr {
+        context_type,
+        state,
+        ..
+    } = machine;
+
+    quote! {
+        fn #method<'ctx, 'data: 'ctx>(
+            &mut self,
+            source: &#state,
+            target: &#state,
+            context: &mut #context_type,
+        ) {
+            ::sotu::blocking::TransitionHook::call_transition_hook(
+                &(#path),
+                self,
+                source,
+                target,
+                context,
+            )
         }
     }
 }

@@ -37,7 +37,7 @@ pub(crate) struct Model {
     pub(crate) context_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
-    /// The functions that observe dispatch.
+    /// The functions that observe dispatch and transitions.
     pub(crate) hooks: HooksModel,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
@@ -56,6 +56,10 @@ pub(crate) struct HooksModel {
     pub(crate) before_dispatch: Option<Path>,
     /// The function called just after a node handled an event.
     pub(crate) after_dispatch: Option<Path>,
+    /// The function called just before a transition runs its exit actions.
+    pub(crate) before_transition: Option<Path>,
+    /// The function called just after a transition ran its entry actions.
+    pub(crate) after_transition: Option<Path>,
 }
 
 /// A state handler of the machine.
@@ -272,6 +276,8 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         hooks: HooksModel {
             before_dispatch: arguments.before_dispatch,
             after_dispatch: arguments.after_dispatch,
+            before_transition: arguments.before_transition,
+            after_transition: arguments.after_transition,
         },
         states,
         superstates,

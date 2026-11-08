@@ -130,6 +130,10 @@ pub(crate) struct MachineArgs {
     pub(crate) before_dispatch: Option<Path>,
     /// The function called just after a node handled an event.
     pub(crate) after_dispatch: Option<Path>,
+    /// The function called just before a transition runs its exit actions.
+    pub(crate) before_transition: Option<Path>,
+    /// The function called just after a transition ran its entry actions.
+    pub(crate) after_transition: Option<Path>,
 }
 
 impl MachineArgs {
@@ -142,6 +146,8 @@ impl MachineArgs {
         "exit",
         "before_dispatch",
         "after_dispatch",
+        "before_transition",
+        "after_transition",
     ];
 
     /// The keys of `#[state_machine]` whose value is a type.
@@ -173,6 +179,10 @@ impl MachineArgs {
             Some(&mut self.before_dispatch)
         } else if key == "after_dispatch" {
             Some(&mut self.after_dispatch)
+        } else if key == "before_transition" {
+            Some(&mut self.before_transition)
+        } else if key == "after_transition" {
+            Some(&mut self.after_transition)
         } else {
             None
         }
@@ -214,6 +224,8 @@ impl Parse for MachineArgs {
             exit: None,
             before_dispatch: None,
             after_dispatch: None,
+            before_transition: None,
+            after_transition: None,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
@@ -664,17 +676,22 @@ mod tests {
     fn machine_arguments_read_exit_and_hooks() {
         let arguments: MachineArgs = syn::parse_str(
             "initial = State::a(), exit = Done, before_dispatch = Self::before, \
-             after_dispatch = Self::after",
+             after_dispatch = Self::after, before_transition = Self::leaving, \
+             after_transition = Self::arrived",
         )
         .unwrap();
 
         let exit = arguments.exit.unwrap();
         let before_dispatch = arguments.before_dispatch.unwrap();
         let after_dispatch = arguments.after_dispatch.unwrap();
+        let before_transition = arguments.before_transition.unwrap();
+        let after_transition = arguments.after_transition.unwrap();
 
         assert_eq!(quote!(#exit).to_string(), "Done");
         assert_eq!(quote!(#before_dispatch).to_string(), "Self :: before");
         assert_eq!(quote!(#after_dispatch).to_string(), "Self :: after");
+        assert_eq!(quote!(#before_transition).to_string(), "Self :: leaving");
+        assert_eq!(quote!(#after_transition).to_string(), "Self :: arrived");
     }
 
     #[test]
