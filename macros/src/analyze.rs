@@ -35,6 +35,8 @@ pub(crate) struct Model {
         expect(dead_code, reason = "generated parameters have fixed names")
     )]
     pub(crate) context_identifier: Ident,
+    /// The type of the exit points through which the machine can be left.
+    pub(crate) exit_type: Type,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
@@ -253,6 +255,9 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
         event_identifier: names.event,
         context_identifier: names.context,
+        exit_type: arguments
+            .exit
+            .unwrap_or_else(|| parse_quote!(::core::convert::Infallible)),
         states,
         superstates,
         actions,
@@ -830,6 +835,25 @@ mod tests {
         let context_type = model.context_type;
 
         assert_eq!(quote!(#context_type).to_string(), "()");
+    }
+
+    #[test]
+    fn exit_type_defaults_to_infallible() {
+        let model = model(parse_quote! {
+            impl Ticker {
+                #[state]
+                fn on(&mut self) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let exit_type = model.exit_type;
+
+        assert_eq!(
+            quote!(#exit_type).to_string(),
+            ":: core :: convert :: Infallible"
+        );
     }
 
     #[test]
