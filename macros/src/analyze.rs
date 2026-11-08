@@ -23,6 +23,18 @@ pub(crate) struct Model {
     pub(crate) event_type: Type,
     /// The context type of the machine, which may use the lifetimes `'ctx` and `'data`.
     pub(crate) context_type: Type,
+    /// The name of the event input.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "generated parameters have fixed names")
+    )]
+    pub(crate) event_identifier: Ident,
+    /// The name of the context input.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "generated parameters have fixed names")
+    )]
+    pub(crate) context_identifier: Ident,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
@@ -106,9 +118,9 @@ pub(crate) struct ActionModel {
 pub(crate) enum InputKind {
     /// The receiver, which is the shared storage.
     Receiver,
-    /// The input named `event`.
+    /// The event input, named `event` unless `event_identifier` renames it.
     Event,
-    /// The input named `context`.
+    /// The context input, named `context` unless `context_identifier` renames it.
     Context,
     /// A reference to the local storage field called `name`.
     LocalStorage {
@@ -133,6 +145,9 @@ pub(crate) enum DefaultValue {
 }
 
 /// The names that classify the event and context inputs.
+///
+/// Classification is by name only, so a renamed input replaces the default
+/// name, which then classifies as local storage.
 struct InputNames {
     /// The name of the event input.
     event: Ident,
@@ -155,8 +170,12 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     let mut event_type = None;
 
     let names = InputNames {
-        event: Ident::new("event", Span::call_site()),
-        context: Ident::new("context", Span::call_site()),
+        event: arguments
+            .event_identifier
+            .unwrap_or_else(|| Ident::new("event", Span::call_site())),
+        context: arguments
+            .context_identifier
+            .unwrap_or_else(|| Ident::new("context", Span::call_site())),
     };
 
     for impl_item in &mut item.items {
@@ -232,6 +251,8 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         initial,
         event_type: event_type.unwrap_or_else(|| parse_quote!(())),
         context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
+        event_identifier: names.event,
+        context_identifier: names.context,
         states,
         superstates,
         actions,
@@ -764,6 +785,35 @@ mod tests {
             model.states[0].inputs,
             [InputKind::Context, InputKind::Event]
         );
+    }
+
+    #[test]
+    fn renamed_identifiers_classify_inputs() {
+        let arguments: MachineArgs = syn::parse_str(
+            "initial = State::on(), event_identifier = input, context_identifier = sink",
+        )
+        .unwrap();
+
+        let item: ItemImpl = parse_quote! {
+            impl Writer {
+                #[state]
+                fn on(input: &Event, sink: &mut Sink<'_, '_>) -> Outcome<State> {
+                    Handled
+                }
+            }
+        };
+
+        let model = match analyze(arguments, item) {
+            Ok(model) => model,
+            Err(error) => panic!("analysis failed: {error}"),
+        };
+
+        assert_eq!(
+            model.states[0].inputs,
+            [InputKind::Event, InputKind::Context]
+        );
+        assert_eq!(model.event_identifier, ident("input"));
+        assert_eq!(model.context_identifier, ident("sink"));
     }
 
     #[test]

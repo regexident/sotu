@@ -80,7 +80,54 @@ mod echo {
     }
 }
 
+mod lamp {
+    use sotu::prelude::*;
+
+    use super::Sink;
+
+    pub struct Lamp;
+
+    pub struct Toggle;
+
+    #[derive(Event)]
+    pub enum Event {
+        Toggle(Toggle),
+    }
+
+    #[state_machine(
+        initial = State::off(),
+        context = Sink<'ctx, 'data>,
+        event_identifier = input,
+        context_identifier = sink
+    )]
+    impl Lamp {
+        #[state]
+        fn off(input: &Event, sink: &mut Sink<'_, '_>) -> Outcome<State> {
+            match input {
+                Event::Toggle(_) => {
+                    sink.output.push(sink.prefix);
+
+                    Transition(State::on())
+                }
+            }
+        }
+
+        #[state(entry_action = light)]
+        fn on(input: &Event) -> Outcome<State> {
+            match input {
+                Event::Toggle(_) => Transition(State::off()),
+            }
+        }
+
+        #[action]
+        fn light(sink: &mut Sink<'_, '_>) {
+            sink.output.push("light");
+        }
+    }
+}
+
 use echo::Echo;
+use lamp::{Lamp, Toggle};
 use writer::{Tick, Writer};
 
 #[test]
@@ -113,4 +160,20 @@ fn two_lifetime_context_is_rebuilt_per_event() {
     }
 
     assert_eq!(lines, ["x", "y", "z"]);
+}
+
+#[test]
+fn renamed_event_and_context_inputs_work() {
+    let mut lines = Vec::new();
+    let mut sink = Sink {
+        output: &mut lines,
+        prefix: "toggle",
+    };
+
+    let mut machine = Lamp.state_machine();
+
+    machine.handle(Toggle, &mut sink);
+
+    assert!(matches!(machine.state(), lamp::State::On {}));
+    assert_eq!(lines, ["toggle", "light"]);
 }

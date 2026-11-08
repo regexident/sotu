@@ -120,16 +120,35 @@ pub(crate) struct MachineArgs {
     pub(crate) initial: Option<Expr>,
     /// The context type, which may use the lifetimes `'ctx` and `'data`.
     pub(crate) context: Option<Type>,
+    /// The name of the event input, replacing `event`.
+    pub(crate) event_identifier: Option<Ident>,
+    /// The name of the context input, replacing `context`.
+    pub(crate) context_identifier: Option<Ident>,
 }
 
 impl MachineArgs {
     /// The keys of `#[state_machine]`.
-    const KEYS: &[&str] = &["initial", "context"];
+    const KEYS: &[&str] = &[
+        "initial",
+        "context",
+        "event_identifier",
+        "context_identifier",
+    ];
 
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
         if key == "initial" {
             self.initial = Some(value.clone());
+
+            return Ok(());
+        }
+
+        let ident = ident_value(value)?;
+
+        if key == "event_identifier" {
+            self.event_identifier = Some(ident);
+        } else {
+            self.context_identifier = Some(ident);
         }
 
         Ok(())
@@ -141,6 +160,8 @@ impl Parse for MachineArgs {
         let mut arguments = Self {
             initial: None,
             context: None,
+            event_identifier: None,
+            context_identifier: None,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
@@ -546,15 +567,28 @@ mod tests {
     }
 
     #[test]
-    fn machine_arguments_read_context() {
-        let arguments: MachineArgs =
-            syn::parse_str("initial = State::a(), context = Sink<'ctx, 'data>").unwrap();
+    fn machine_arguments_read_context_and_identifiers() {
+        let arguments: MachineArgs = syn::parse_str(
+            "initial = State::a(), context = Sink<'ctx, 'data>, event_identifier = input, \
+             context_identifier = sink",
+        )
+        .unwrap();
 
         let initial = arguments.initial.unwrap();
         let context = arguments.context.unwrap();
 
         assert_eq!(quote!(#initial).to_string(), "State :: a ()");
         assert_eq!(quote!(#context).to_string(), "Sink < 'ctx , 'data >");
+        assert!(
+            arguments
+                .event_identifier
+                .is_some_and(|name| name == "input")
+        );
+        assert!(
+            arguments
+                .context_identifier
+                .is_some_and(|name| name == "sink")
+        );
     }
 
     #[test]
