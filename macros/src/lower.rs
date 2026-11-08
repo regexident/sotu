@@ -4,7 +4,8 @@ use proc_macro2::Span;
 use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Type, parse_quote};
 
 use crate::analyze::{
-    ActionModel, DefaultValue, FieldModel, InputKind, Model, StateModel, SuperstateModel,
+    ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, StateModel,
+    SuperstateModel,
 };
 
 // MARK: Intermediate Representation
@@ -71,6 +72,8 @@ pub(crate) struct MachineIr {
     pub(crate) superstate: Option<SuperstateTypeIr>,
     /// The expression that builds the initial state.
     pub(crate) initial: Expr,
+    /// The hook functions, which only `IntoStateMachine` declares.
+    pub(crate) hooks: HooksModel,
 }
 
 /// The implementation of the blocking `State` trait.
@@ -275,6 +278,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
             state: state.clone(),
             superstate: superstate_type.clone(),
             initial: model.initial.clone(),
+            hooks: model.hooks.clone(),
         },
         dispatch: DispatchIr {
             shared_storage: model.shared_storage.clone(),
