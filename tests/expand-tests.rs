@@ -19,6 +19,13 @@ mod state {
     }
 }
 
+mod superstate {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/superstate/pass/**/*.rs"]).and_check();
+    }
+}
+
 mod action {
     #[test]
     pub fn pass() {
