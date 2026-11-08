@@ -57,14 +57,33 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// `sotu::blocking::IntoStateMachine` and `sotu::blocking::State`, so the storage
 /// type can be turned into a running machine.
 ///
-/// The argument `initial` is required and takes tokens, not a string literal: it
-/// is the expression that builds the state the machine starts in.
+/// Every argument takes tokens, not a string literal:
 ///
-/// A handler takes an optional receiver, which is the shared storage, and an
-/// optional input named `event`. The type behind the `event` reference is the
-/// event type of the machine. It is `()` when no handler takes an event, which
-/// makes the machine usable through `step`. A handler's attributes other than
-/// the ones of `sotu` stay on the function.
+/// - `initial = expression` is required and builds the state the machine
+///   starts in.
+/// - `context = Type` names the context handed to every handler and action. The
+///   type may use the lifetimes `'ctx` and `'data` and any lifetime declared on
+///   the `impl` block, and becomes `type Context<'ctx, 'data: 'ctx> = Type`. It
+///   is `()` when the argument is absent. Two lifetimes are needed because
+///   `&'a mut T` is invariant in `T`: with only one, a context such as
+///   `Writer<'a>` holding `&'a mut Vec<&'a str>` could not be rebuilt for each
+///   event inside a loop.
+/// - `event_identifier = ident` renames the event input, which is `event` by
+///   default.
+/// - `context_identifier = ident` renames the context input, which is `context`
+///   by default.
+///
+/// A handler takes an optional receiver, which is the shared storage, an
+/// optional event input and an optional context input. Inputs are classified
+/// by name only, so a renamed identifier replaces the default name, which then
+/// declares local storage like any other reference input. The type behind the
+/// event reference, as in `event: &Event`, is the event type of the machine. It
+/// is `()` when no handler takes an event, which makes the machine usable
+/// through `step`. The context input has the type `&mut Ctx<'_, '_>`, where
+/// `Ctx` is the type given to `context`. State handlers, superstate handlers
+/// and actions may all take the context input, and the generated code passes
+/// them the context given to `handle`, `step` or `init`. A handler's attributes
+/// other than the ones of `sotu` stay on the function.
 ///
 /// Invalid arguments are reported on their own as a compile error, without the
 /// impl block being examined. Once the arguments parse, the errors found in the
