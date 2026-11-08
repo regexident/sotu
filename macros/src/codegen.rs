@@ -2,7 +2,7 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{Attribute, Expr, Type};
+use syn::{Attribute, Expr, PathArguments, Token, Type, parse_quote};
 
 use crate::lower::{
     ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, ParentArmIr,
@@ -163,10 +163,11 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
 
 fn into_state_machine_impl(machine: &MachineIr) -> TokenStream {
     let shared_storage = &machine.shared_storage;
+    let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
 
     quote! {
-        impl ::sotu::blocking::IntoStateMachine for #shared_storage {
+        impl #impl_generics ::sotu::blocking::IntoStateMachine for #shared_storage #where_clause {
             #items
         }
     }
@@ -174,14 +175,17 @@ fn into_state_machine_impl(machine: &MachineIr) -> TokenStream {
 
 fn submachine_impls(machine: &MachineIr) -> TokenStream {
     let shared_storage = &machine.shared_storage;
+    let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
 
     quote! {
-        impl ::sotu::private::Submachine for #shared_storage {
+        impl #impl_generics ::sotu::private::Submachine for #shared_storage #where_clause {
             #items
         }
 
-        impl ::sotu::private::BlockingSubmachine for #shared_storage {}
+        impl #impl_generics ::sotu::private::BlockingSubmachine for #shared_storage
+        #where_clause
+        {}
     }
 }
 
@@ -189,6 +193,7 @@ fn submachine_impls(machine: &MachineIr) -> TokenStream {
 fn machine_items(machine: &MachineIr) -> TokenStream {
     let MachineIr {
         shared_storage: _,
+        generics: _,
         event_type,
         context_type,
         state,
@@ -219,6 +224,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
 fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
     let DispatchIr {
         shared_storage,
+        generics,
         event_type,
         context_type,
         state,
@@ -259,8 +265,10 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         .as_ref()
         .map(|parents| parent_method(state, parents));
 
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+
     quote! {
-        impl ::sotu::blocking::State<#shared_storage> for #state {
+        impl #impl_generics ::sotu::blocking::State<#shared_storage> for #state #where_clause {
             fn call_handler<'ctx, 'data: 'ctx>(
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
@@ -288,6 +296,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         ty,
         variants,
         shared_storage,
+        generics,
         event_type,
         context_type,
         state,
@@ -303,7 +312,13 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let name = &ty.name;
     let declared = superstate_type(ty, &quote!('sub));
     let elided = superstate_type(ty, &quote!('_));
-    let impl_generics = ty.has_lifetime.then(|| quote!(<'sub>));
+    let mut generics = generics.clone();
+
+    if ty.has_lifetime {
+        generics.params.insert(0, parse_quote!('sub));
+    }
+
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
 
     let arms = arms
         .iter()
@@ -344,7 +359,9 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let different_variants = (variants.len() > 1).then(|| quote!(_ => false,));
 
     quote! {
-        impl #impl_generics ::sotu::blocking::Superstate<#shared_storage> for #declared {
+        impl #impl_generics ::sotu::blocking::Superstate<#shared_storage> for #declared
+        #where_clause
+        {
             fn call_handler<'ctx, 'data: 'ctx>(
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
@@ -486,7 +503,29 @@ fn call(shared_storage: &Type, call: &CallIr) -> TokenStream {
         arguments,
     } = call;
 
+    let path = expression_path(shared_storage);
+
     quote! {
-        #shared_storage::#function(#(#arguments),*)
+        #path::#function(#(#arguments),*)
     }
+}
+
+/// Write `ty` as the path that qualifies a call to one of its associated functions.
+///
+/// Generic arguments in expression position need the turbofish, as in
+/// `Tagger::<'a>::tagging`. A type that is not a path is qualified as `<Type>`.
+fn expression_path(ty: &Type) -> TokenStream {
+    let Type::Path(path) = ty else {
+        return quote!(<#ty>);
+    };
+
+    let mut path = path.clone();
+
+    for segment in &mut path.path.segments {
+        if let PathArguments::AngleBracketed(arguments) = &mut segment.arguments {
+            arguments.colon2_token = Some(<Token![::]>::default());
+        }
+    }
+
+    quote!(#path)
 }

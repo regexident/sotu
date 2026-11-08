@@ -1,7 +1,7 @@
 //! Resolve every name, type and call the generated code needs.
 
 use proc_macro2::Span;
-use syn::{Attribute, Expr, Ident, ItemImpl, Type, parse_quote};
+use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Type, parse_quote};
 
 use crate::analyze::{
     ActionModel, DefaultValue, FieldModel, InputKind, Model, StateModel, SuperstateModel,
@@ -57,6 +57,8 @@ pub(crate) struct FieldIr {
 pub(crate) struct MachineIr {
     /// The type implementing the traits.
     pub(crate) shared_storage: Type,
+    /// The generics of the impl block, which the context type may use.
+    pub(crate) generics: Generics,
     /// The event type of the machine.
     pub(crate) event_type: Type,
     /// The context type of the machine, which may use the lifetimes `'ctx` and `'data`.
@@ -73,6 +75,8 @@ pub(crate) struct MachineIr {
 pub(crate) struct DispatchIr {
     /// The type the handlers belong to.
     pub(crate) shared_storage: Type,
+    /// The generics of the impl block.
+    pub(crate) generics: Generics,
     /// The event type of the machine.
     pub(crate) event_type: Type,
     /// The context type of the machine.
@@ -116,6 +120,8 @@ pub(crate) struct SuperstateIr {
     pub(crate) variants: Vec<SuperstateVariantIr>,
     /// The type the handlers belong to.
     pub(crate) shared_storage: Type,
+    /// The generics of the impl block.
+    pub(crate) generics: Generics,
     /// The event type of the machine.
     pub(crate) event_type: Type,
     /// The context type of the machine.
@@ -256,6 +262,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         },
         machine: MachineIr {
             shared_storage: model.shared_storage.clone(),
+            generics: model.item.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
             state: state.clone(),
@@ -264,6 +271,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         },
         dispatch: DispatchIr {
             shared_storage: model.shared_storage.clone(),
+            generics: model.item.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
             state: state.clone(),
@@ -357,6 +365,7 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
             .map(lower_superstate_variant)
             .collect(),
         shared_storage: model.shared_storage.clone(),
+        generics: model.item.generics.clone(),
         event_type: model.event_type.clone(),
         context_type: model.context_type.clone(),
         state,
