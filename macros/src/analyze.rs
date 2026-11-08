@@ -21,6 +21,8 @@ pub(crate) struct Model {
     pub(crate) initial: Expr,
     /// The event type of the machine.
     pub(crate) event_type: Type,
+    /// The context type of the machine, which may use the lifetimes `'ctx` and `'data`.
+    pub(crate) context_type: Type,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
@@ -106,6 +108,8 @@ pub(crate) enum InputKind {
     Receiver,
     /// The input named `event`.
     Event,
+    /// The input named `context`.
+    Context,
     /// A reference to the local storage field called `name`.
     LocalStorage {
         /// The name of the field.
@@ -128,6 +132,14 @@ pub(crate) enum DefaultValue {
     Expr(Expr),
 }
 
+/// The names that classify the event and context inputs.
+struct InputNames {
+    /// The name of the event input.
+    event: Ident,
+    /// The name of the context input.
+    context: Ident,
+}
+
 // MARK: Analysis
 
 /// Validate `item` and classify its handlers into a [`Model`].
@@ -142,6 +154,11 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     let mut actions = Vec::new();
     let mut event_type = None;
 
+    let names = InputNames {
+        event: Ident::new("event", Span::call_site()),
+        context: Ident::new("context", Span::call_site()),
+    };
+
     for impl_item in &mut item.items {
         let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
             continue;
@@ -152,6 +169,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
                 states.push(analyze_state(
                     function,
                     state_arguments,
+                    &names,
                     &mut event_type,
                     &mut errors,
                 ));
@@ -160,12 +178,13 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
                 superstates.push(analyze_superstate(
                     function,
                     superstate_arguments,
+                    &names,
                     &mut event_type,
                     &mut errors,
                 ));
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
-                actions.push(analyze_action(function, &mut errors));
+                actions.push(analyze_action(function, &names, &mut errors));
             }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
@@ -212,6 +231,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         shared_storage: (*item.self_ty).clone(),
         initial,
         event_type: event_type.unwrap_or_else(|| parse_quote!(())),
+        context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
         states,
         superstates,
         actions,
@@ -309,6 +329,7 @@ fn check_superstate_references(
 fn handler_inputs(
     function: &mut ImplItemFn,
     takes_defaults: bool,
+    names: &InputNames,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> Vec<InputKind> {
@@ -317,7 +338,10 @@ fn handler_inputs(
     for input in &mut function.sig.inputs {
         match input {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
-            FnArg::Typed(typed) if is_event(typed) => match event_referent(typed) {
+            FnArg::Typed(typed) if is_named(typed, &names.context) => {
+                inputs.push(InputKind::Context);
+            }
+            FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
                 Ok(referent) => {
                     inputs.push(InputKind::Event);
                     event_type.get_or_insert_with(|| referent.clone());
@@ -368,13 +392,14 @@ fn handler_inputs(
 fn analyze_superstate(
     function: &mut ImplItemFn,
     arguments: SuperstateArgs,
+    names: &InputNames,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> SuperstateModel {
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, false, event_type, errors);
+    let inputs = handler_inputs(function, false, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(borrowed_field).collect();
 
@@ -440,13 +465,14 @@ fn handler_docs(function: &ImplItemFn) -> Vec<Attribute> {
 fn analyze_state(
     function: &mut ImplItemFn,
     arguments: StateArgs,
+    names: &InputNames,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> StateModel {
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, true, event_type, errors);
+    let inputs = handler_inputs(function, true, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(input_field).collect();
 
@@ -476,12 +502,19 @@ fn analyze_state(
     }
 }
 
-fn analyze_action(function: &ImplItemFn, errors: &mut Option<syn::Error>) -> ActionModel {
+fn analyze_action(
+    function: &ImplItemFn,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) -> ActionModel {
     let mut inputs = Vec::new();
 
     for input in &function.sig.inputs {
         match input {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
+            FnArg::Typed(typed) if is_named(typed, &names.context) => {
+                inputs.push(InputKind::Context);
+            }
             FnArg::Typed(typed) => match local_storage_input(typed) {
                 Some((name, ty, mutable)) => inputs.push(InputKind::LocalStorage {
                     name,
@@ -565,24 +598,24 @@ fn input_field(input: &InputKind) -> Option<FieldModel> {
             ty: ty.clone(),
             default: default.clone(),
         }),
-        InputKind::Receiver | InputKind::Event => None,
+        InputKind::Receiver | InputKind::Event | InputKind::Context => None,
     }
 }
 
-/// Return whether `typed` is the input named `event`.
-fn is_event(typed: &PatType) -> bool {
-    matches!(&*typed.pat, Pat::Ident(pattern) if pattern.ident == "event")
+/// Return whether `typed` is the input called `name`.
+fn is_named(typed: &PatType, name: &Ident) -> bool {
+    matches!(&*typed.pat, Pat::Ident(pattern) if pattern.ident == *name)
 }
 
-/// Return the type behind the reference of the `event` input `typed`.
+/// Return the type behind the reference of the event input `typed`.
 ///
-/// Fails if `event` is not a shared reference.
+/// Fails if the event input is not a shared reference.
 fn event_referent(typed: &PatType) -> syn::Result<&Type> {
     match &*typed.ty {
         Type::Reference(reference) if reference.mutability.is_none() => Ok(&reference.elem),
         ty => Err(syn::Error::new_spanned(
             ty,
-            "the `event` input must be a shared reference, as in `event: &Event`",
+            "the event input must be a shared reference, as in `event: &Event`",
         )),
     }
 }
@@ -714,6 +747,39 @@ mod tests {
         let event_type = model.event_type;
 
         assert_eq!(quote!(#event_type).to_string(), "()");
+    }
+
+    #[test]
+    fn context_input_is_classified() {
+        let model = model(parse_quote! {
+            impl Writer {
+                #[state]
+                fn on(context: &mut Sink<'_, '_>, event: &Event) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        assert_eq!(
+            model.states[0].inputs,
+            [InputKind::Context, InputKind::Event]
+        );
+    }
+
+    #[test]
+    fn context_type_defaults_to_unit() {
+        let model = model(parse_quote! {
+            impl Ticker {
+                #[state]
+                fn on(&mut self) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let context_type = model.context_type;
+
+        assert_eq!(quote!(#context_type).to_string(), "()");
     }
 
     #[test]
