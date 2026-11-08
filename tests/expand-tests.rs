@@ -12,6 +12,13 @@ mod event {
     }
 }
 
+mod state_machine {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/state_machine/pass/**/*.rs"]).and_check();
+    }
+}
+
 mod state {
     #[test]
     pub fn pass() {
