@@ -190,6 +190,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
     let MachineIr {
         shared_storage: _,
         event_type,
+        context_type,
         state,
         superstate,
         initial,
@@ -202,7 +203,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
 
     quote! {
         type Event = #event_type;
-        type Context<'ctx, 'data: 'ctx> = ();
+        type Context<'ctx, 'data: 'ctx> = #context_type;
         type State = #state;
         type Superstate<'sub> = #superstate;
         type Exit = ::core::convert::Infallible;
@@ -219,9 +220,11 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
     let DispatchIr {
         shared_storage,
         event_type,
+        context_type,
         state,
         shared_storage_parameter,
         event_parameter,
+        context_parameter,
         arms,
         entry_actions,
         exit_actions,
@@ -236,6 +239,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         action_method(
             state,
             shared_storage,
+            context_type,
             &format_ident!("call_entry_action"),
             actions,
         )
@@ -245,6 +249,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         action_method(
             state,
             shared_storage,
+            context_type,
             &format_ident!("call_exit_action"),
             actions,
         )
@@ -260,7 +265,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
-                _context: &mut (),
+                #context_parameter: &mut #context_type,
             ) -> ::sotu::Outcome<Self, ::core::convert::Infallible> {
                 match self {
                     #(#arms)*
@@ -284,9 +289,11 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         variants,
         shared_storage,
         event_type,
+        context_type,
         state,
         shared_storage_parameter,
         event_parameter,
+        context_parameter,
         arms,
         entry_actions,
         exit_actions,
@@ -306,6 +313,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         action_method(
             name,
             shared_storage,
+            context_type,
             &format_ident!("call_entry_action"),
             actions,
         )
@@ -315,6 +323,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         action_method(
             name,
             shared_storage,
+            context_type,
             &format_ident!("call_exit_action"),
             actions,
         )
@@ -340,7 +349,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
-                _context: &mut (),
+                #context_parameter: &mut #context_type,
             ) -> ::sotu::Outcome<#state, ::core::convert::Infallible> {
                 match self {
                     #(#arms)*
@@ -368,10 +377,12 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
 fn action_method(
     enum_name: &Ident,
     shared_storage: &Type,
+    context_type: &Type,
     method: &Ident,
     actions: &ActionDispatchIr,
 ) -> TokenStream {
     let shared_storage_parameter = &actions.shared_storage_parameter;
+    let context_parameter = &actions.context_parameter;
 
     let arms = actions
         .arms
@@ -382,7 +393,7 @@ fn action_method(
         fn #method<'ctx, 'data: 'ctx>(
             &mut self,
             #shared_storage_parameter: &mut #shared_storage,
-            _context: &mut (),
+            #context_parameter: &mut #context_type,
         ) {
             match self {
                 #(#arms)*

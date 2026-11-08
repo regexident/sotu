@@ -59,6 +59,8 @@ pub(crate) struct MachineIr {
     pub(crate) shared_storage: Type,
     /// The event type of the machine.
     pub(crate) event_type: Type,
+    /// The context type of the machine, which may use the lifetimes `'ctx` and `'data`.
+    pub(crate) context_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The superstate enum, or `None` if the associated type is `()`.
@@ -73,12 +75,16 @@ pub(crate) struct DispatchIr {
     pub(crate) shared_storage: Type,
     /// The event type of the machine.
     pub(crate) event_type: Type,
+    /// The context type of the machine.
+    pub(crate) context_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
     /// The name of the event parameter, underscored when unused.
     pub(crate) event_parameter: Ident,
+    /// The name of the context parameter, underscored when unused.
+    pub(crate) context_parameter: Ident,
     /// One match arm per variant, in declaration order.
     pub(crate) arms: Vec<ArmIr>,
     /// The body of `call_entry_action`, if any state has an entry action.
@@ -112,12 +118,16 @@ pub(crate) struct SuperstateIr {
     pub(crate) shared_storage: Type,
     /// The event type of the machine.
     pub(crate) event_type: Type,
+    /// The context type of the machine.
+    pub(crate) context_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
     /// The name of the event parameter, underscored when unused.
     pub(crate) event_parameter: Ident,
+    /// The name of the context parameter, underscored when unused.
+    pub(crate) context_parameter: Ident,
     /// One match arm per variant, in declaration order.
     pub(crate) arms: Vec<ArmIr>,
     /// The body of `call_entry_action`, if any superstate has an entry action.
@@ -154,6 +164,8 @@ pub(crate) struct ArmIr {
 pub(crate) struct ActionDispatchIr {
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
+    /// The name of the context parameter, underscored when unused.
+    pub(crate) context_parameter: Ident,
     /// One match arm per variant, in declaration order.
     pub(crate) arms: Vec<ActionArmIr>,
 }
@@ -229,6 +241,7 @@ struct ActionNode<'model> {
 
 const SHARED_STORAGE: &str = "shared_storage";
 const EVENT: &str = "event";
+const CONTEXT: &str = "context";
 
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
@@ -244,6 +257,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         machine: MachineIr {
             shared_storage: model.shared_storage.clone(),
             event_type: model.event_type.clone(),
+            context_type: model.context_type.clone(),
             state: state.clone(),
             superstate: superstate_type.clone(),
             initial: model.initial.clone(),
@@ -251,6 +265,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         dispatch: DispatchIr {
             shared_storage: model.shared_storage.clone(),
             event_type: model.event_type.clone(),
+            context_type: model.context_type.clone(),
             state: state.clone(),
             shared_storage_parameter: handler_parameter(
                 model,
@@ -258,6 +273,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
                 SHARED_STORAGE,
             ),
             event_parameter: handler_parameter(model, &InputKind::Event, EVENT),
+            context_parameter: handler_parameter(model, &InputKind::Context, CONTEXT),
             arms: model
                 .states
                 .iter()
@@ -342,9 +358,11 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
             .collect(),
         shared_storage: model.shared_storage.clone(),
         event_type: model.event_type.clone(),
+        context_type: model.context_type.clone(),
         state,
         shared_storage_parameter: parameter(SHARED_STORAGE, takes(&InputKind::Receiver)),
         event_parameter: parameter(EVENT, takes(&InputKind::Event)),
+        context_parameter: parameter(CONTEXT, takes(&InputKind::Context)),
         arms: model
             .superstates
             .iter()
@@ -516,10 +534,12 @@ fn lower_action_dispatch(
         actions.iter().find(|action| action.name == *name)
     };
 
-    let takes_receiver = nodes
-        .iter()
-        .filter_map(&resolve)
-        .any(|action| action.inputs.contains(&InputKind::Receiver));
+    let takes = |input: &InputKind| {
+        nodes
+            .iter()
+            .filter_map(&resolve)
+            .any(|action| action.inputs.contains(input))
+    };
 
     let arms = nodes
         .iter()
@@ -527,7 +547,8 @@ fn lower_action_dispatch(
         .collect();
 
     Some(ActionDispatchIr {
-        shared_storage_parameter: parameter(SHARED_STORAGE, takes_receiver),
+        shared_storage_parameter: parameter(SHARED_STORAGE, takes(&InputKind::Receiver)),
+        context_parameter: parameter(CONTEXT, takes(&InputKind::Context)),
         arms,
     })
 }
@@ -552,7 +573,7 @@ fn lower_pattern(variant: &Ident, fields: &[FieldModel], inputs: &[InputKind]) -
         .iter()
         .filter_map(|input| match input {
             InputKind::LocalStorage { name, .. } => Some(name.clone()),
-            InputKind::Receiver | InputKind::Event => None,
+            InputKind::Receiver | InputKind::Event | InputKind::Context => None,
         })
         .collect();
 
@@ -574,6 +595,7 @@ fn argument(input: &InputKind) -> Ident {
     match input {
         InputKind::Receiver => generated_ident(SHARED_STORAGE),
         InputKind::Event => generated_ident(EVENT),
+        InputKind::Context => generated_ident(CONTEXT),
         InputKind::LocalStorage { name, .. } => name.clone(),
     }
 }

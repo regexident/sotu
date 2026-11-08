@@ -118,20 +118,100 @@ fn unknown_argument(key: &Ident, expected: &[&str]) -> String {
 pub(crate) struct MachineArgs {
     /// The expression that builds the initial state.
     pub(crate) initial: Option<Expr>,
+    /// The context type, which may use the lifetimes `'ctx` and `'data`.
+    pub(crate) context: Option<Type>,
+}
+
+impl MachineArgs {
+    /// The keys of `#[state_machine]`.
+    const KEYS: &[&str] = &["initial", "context"];
+
+    /// Store the `key = value` argument `key`.
+    fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        if key == "initial" {
+            self.initial = Some(value.clone());
+        }
+
+        Ok(())
+    }
 }
 
 impl Parse for MachineArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let mut initial = None;
+        let mut arguments = Self {
+            initial: None,
+            context: None,
+        };
 
-        for (key, value) in parse_key_values(input, &["initial"])? {
-            if key == "initial" {
-                initial = Some(value);
+        let mut entries: Vec<(Ident, Expr)> = Vec::new();
+        let mut errors = None;
+
+        // A syntax error leaves the stream in an unknown position, so it ends the
+        // loop while keeping the errors found so far. The context is a type, which
+        // does not parse as the expression every other value is.
+        while !input.is_empty() {
+            if is_type_argument(input, "context") {
+                match parse_type_argument(input) {
+                    Ok((key, _)) if arguments.context.is_some() => push_error(
+                        &mut errors,
+                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                    ),
+                    Ok((_, ty)) => arguments.context = Some(ty),
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            let (key, value) = match parse_key_value(input) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_error(&mut errors, error);
+
+                    break;
+                }
+            };
+
+            let validated = validate_key_value(&key, &value, Self::KEYS, &entries)
+                .and_then(|()| arguments.set_key_value(&key, &value));
+
+            match validated {
+                Ok(()) => entries.push((key, value)),
+                Err(error) => push_error(&mut errors, error),
             }
         }
 
-        Ok(Self { initial })
+        match errors {
+            Some(error) => Err(error),
+            None => Ok(arguments),
+        }
     }
+}
+
+/// Return whether the next argument in `input` is written `key = Type`.
+fn is_type_argument(input: ParseStream<'_>, key: &str) -> bool {
+    let fork = input.fork();
+
+    fork.parse::<Ident>().is_ok_and(|ident| ident == key) && fork.peek(Token![=])
+}
+
+/// Parse one `key = Type` argument and the comma that separates it from the next.
+fn parse_type_argument(input: ParseStream<'_>) -> syn::Result<(Ident, Type)> {
+    let key: Ident = input.parse()?;
+
+    input.parse::<Token![=]>()?;
+
+    let ty: Type = input.parse()?;
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok((key, ty))
 }
 
 // MARK: Item Attributes
@@ -463,6 +543,18 @@ mod tests {
         let initial = arguments.initial.unwrap();
 
         assert_eq!(quote!(#initial).to_string(), "State :: idle ()");
+    }
+
+    #[test]
+    fn machine_arguments_read_context() {
+        let arguments: MachineArgs =
+            syn::parse_str("initial = State::a(), context = Sink<'ctx, 'data>").unwrap();
+
+        let initial = arguments.initial.unwrap();
+        let context = arguments.context.unwrap();
+
+        assert_eq!(quote!(#initial).to_string(), "State :: a ()");
+        assert_eq!(quote!(#context).to_string(), "Sink < 'ctx , 'data >");
     }
 
     #[test]
