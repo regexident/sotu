@@ -72,6 +72,23 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///   default.
 /// - `context_identifier = ident` renames the context input, which is `context`
 ///   by default.
+/// - `exit = Type` names the exit points through which the machine can be left,
+///   and becomes `type Exit = Type`. Handlers then return `Outcome<State, Type>`,
+///   and a handler of the root machine that returns `Exit(value)` terminates it.
+///   It is `::core::convert::Infallible` when the argument is absent.
+/// - `before_dispatch = path` and `after_dispatch = path` name functions called
+///   just before and just after each node handles an event. Such a function
+///   takes `&mut self`, the node as a `StateOrSuperstate<'_, State, Superstate>`
+///   and the event, where `Superstate` is `()` for a machine without
+///   superstates.
+/// - `before_transition = path` and `after_transition = path` name functions
+///   called just before the first exit action and just after the last entry
+///   action of a transition. Such a function takes `&mut self`, the source state
+///   and the target state.
+///
+/// A hook function may take the context input as a trailing parameter, and the
+/// generated code passes it the context only if it does. A hook whose argument
+/// is absent keeps the no-op default of `sotu::blocking::IntoStateMachine`.
 ///
 /// A handler takes an optional receiver, which is the shared storage, an
 /// optional event input and an optional context input. Inputs are classified
