@@ -196,6 +196,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         generics: _,
         event_type,
         context_type,
+        exit_type,
         state,
         superstate,
         initial,
@@ -211,7 +212,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         type Context<'ctx, 'data: 'ctx> = #context_type;
         type State = #state;
         type Superstate<'sub> = #superstate;
-        type Exit = ::core::convert::Infallible;
+        type Exit = #exit_type;
 
         fn initial() -> #state {
             #initial
@@ -227,6 +228,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         generics,
         event_type,
         context_type,
+        exit_type,
         state,
         shared_storage_parameter,
         event_parameter,
@@ -274,7 +276,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
                 #context_parameter: &mut #context_type,
-            ) -> ::sotu::Outcome<Self, ::core::convert::Infallible> {
+            ) -> ::sotu::Outcome<Self, #exit_type> {
                 match self {
                     #(#arms)*
                 }
@@ -299,6 +301,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         generics,
         event_type,
         context_type,
+        exit_type,
         state,
         shared_storage_parameter,
         event_parameter,
@@ -367,7 +370,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
                 #context_parameter: &mut #context_type,
-            ) -> ::sotu::Outcome<#state, ::core::convert::Infallible> {
+            ) -> ::sotu::Outcome<#state, #exit_type> {
                 match self {
                     #(#arms)*
                 }

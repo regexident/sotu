@@ -63,6 +63,8 @@ pub(crate) struct MachineIr {
     pub(crate) event_type: Type,
     /// The context type of the machine, which may use the lifetimes `'ctx` and `'data`.
     pub(crate) context_type: Type,
+    /// The type of the exit points of the machine.
+    pub(crate) exit_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The superstate enum, or `None` if the associated type is `()`.
@@ -81,6 +83,8 @@ pub(crate) struct DispatchIr {
     pub(crate) event_type: Type,
     /// The context type of the machine.
     pub(crate) context_type: Type,
+    /// The type of the exit points of the machine.
+    pub(crate) exit_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The name of the shared storage parameter, underscored when unused.
@@ -126,6 +130,8 @@ pub(crate) struct SuperstateIr {
     pub(crate) event_type: Type,
     /// The context type of the machine.
     pub(crate) context_type: Type,
+    /// The type of the exit points of the machine.
+    pub(crate) exit_type: Type,
     /// The name of the state enum.
     pub(crate) state: Ident,
     /// The name of the shared storage parameter, underscored when unused.
@@ -265,6 +271,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
             generics: model.item.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
+            exit_type: model.exit_type.clone(),
             state: state.clone(),
             superstate: superstate_type.clone(),
             initial: model.initial.clone(),
@@ -274,6 +281,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
             generics: model.item.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
+            exit_type: model.exit_type.clone(),
             state: state.clone(),
             shared_storage_parameter: handler_parameter(
                 model,
@@ -368,6 +376,7 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
         generics: model.item.generics.clone(),
         event_type: model.event_type.clone(),
         context_type: model.context_type.clone(),
+        exit_type: model.exit_type.clone(),
         state,
         shared_storage_parameter: parameter(SHARED_STORAGE, takes(&InputKind::Receiver)),
         event_parameter: parameter(EVENT, takes(&InputKind::Event)),

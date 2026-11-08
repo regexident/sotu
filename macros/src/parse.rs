@@ -124,6 +124,8 @@ pub(crate) struct MachineArgs {
     pub(crate) event_identifier: Option<Ident>,
     /// The name of the context input, replacing `context`.
     pub(crate) context_identifier: Option<Ident>,
+    /// The type of the exit points through which the machine can be left.
+    pub(crate) exit: Option<Type>,
 }
 
 impl MachineArgs {
@@ -133,7 +135,31 @@ impl MachineArgs {
         "context",
         "event_identifier",
         "context_identifier",
+        "exit",
     ];
+
+    /// The keys of `#[state_machine]` whose value is a type.
+    const TYPE_KEYS: &[&str] = &["context", "exit"];
+
+    /// Store the `key = Type` argument `key`, reporting a duplicate.
+    fn set_type(&mut self, key: &Ident, ty: Type) -> syn::Result<()> {
+        let slot = if key == "context" {
+            &mut self.context
+        } else {
+            &mut self.exit
+        };
+
+        if slot.is_some() {
+            return Err(syn::Error::new_spanned(
+                key,
+                format!("duplicate `{key}` item"),
+            ));
+        }
+
+        *slot = Some(ty);
+
+        Ok(())
+    }
 
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
@@ -162,22 +188,26 @@ impl Parse for MachineArgs {
             context: None,
             event_identifier: None,
             context_identifier: None,
+            exit: None,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
         let mut errors = None;
 
         // A syntax error leaves the stream in an unknown position, so it ends the
-        // loop while keeping the errors found so far. The context is a type, which
-        // does not parse as the expression every other value is.
+        // loop while keeping the errors found so far. The context and exit are
+        // types, which do not parse as the expression every other value is.
         while !input.is_empty() {
-            if is_type_argument(input, "context") {
+            if Self::TYPE_KEYS
+                .iter()
+                .any(|key| is_type_argument(input, key))
+            {
                 match parse_type_argument(input) {
-                    Ok((key, _)) if arguments.context.is_some() => push_error(
-                        &mut errors,
-                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
-                    ),
-                    Ok((_, ty)) => arguments.context = Some(ty),
+                    Ok((key, ty)) => {
+                        if let Err(error) = arguments.set_type(&key, ty) {
+                            push_error(&mut errors, error);
+                        }
+                    }
                     Err(error) => {
                         push_error(&mut errors, error);
 
@@ -589,6 +619,15 @@ mod tests {
                 .context_identifier
                 .is_some_and(|name| name == "sink")
         );
+    }
+
+    #[test]
+    fn machine_arguments_read_exit() {
+        let arguments: MachineArgs = syn::parse_str("initial = State::a(), exit = Done").unwrap();
+
+        let exit = arguments.exit.unwrap();
+
+        assert_eq!(quote!(#exit).to_string(), "Done");
     }
 
     #[test]
