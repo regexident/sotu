@@ -1,5 +1,74 @@
 use sotu::prelude::*;
 
+pub struct Start;
+pub struct Opened;
+pub struct Closed;
+pub struct Elapsed;
+
+#[derive(Event)]
+pub enum Event {
+    Start(Start),
+    Opened(Opened),
+    Closed(Closed),
+    Elapsed(Elapsed),
+}
+
+#[derive(Clone, Copy)]
+enum Resume {
+    Idle,
+    Washing,
+}
+
+pub struct Dishwasher {
+    resume: Resume,
+}
+
+#[state_machine(initial = State::idle(), after_transition = Self::remember)]
+impl Dishwasher {
+    fn remember(&mut self, source: &State, _target: &State) {
+        match source {
+            State::Idle {} => self.resume = Resume::Idle,
+            State::Washing {} => self.resume = Resume::Washing,
+            State::DoorOpen {} => {}
+        }
+    }
+
+    #[superstate]
+    fn door_closed(event: &Event) -> Outcome<State> {
+        match event {
+            Event::Opened(_) => Transition(State::door_open()),
+            _ => Super,
+        }
+    }
+
+    #[state(superstate = door_closed)]
+    fn idle(event: &Event) -> Outcome<State> {
+        match event {
+            Event::Start(_) => Transition(State::washing()),
+            _ => Super,
+        }
+    }
+
+    #[state(superstate = door_closed)]
+    fn washing(event: &Event) -> Outcome<State> {
+        match event {
+            Event::Elapsed(_) => Transition(State::idle()),
+            _ => Super,
+        }
+    }
+
+    #[state]
+    fn door_open(&self, event: &Event) -> Outcome<State> {
+        match event {
+            Event::Closed(_) => match self.resume {
+                Resume::Idle => Transition(State::idle()),
+                Resume::Washing => Transition(State::washing()),
+            },
+            _ => Super,
+        }
+    }
+}
+
 mod finisher {
     use sotu::prelude::*;
 
@@ -326,4 +395,28 @@ fn hooks_with_context_receive_context() {
             "after transition"
         ]
     );
+}
+
+#[test]
+fn history_through_after_transition_hook() {
+    let mut resumed_washing = Dishwasher {
+        resume: Resume::Idle,
+    }
+    .state_machine();
+
+    resumed_washing.handle(Start, &mut ());
+    resumed_washing.handle(Opened, &mut ());
+    resumed_washing.handle(Closed, &mut ());
+
+    assert!(matches!(resumed_washing.state(), State::Washing {}));
+
+    let mut resumed_idle = Dishwasher {
+        resume: Resume::Washing,
+    }
+    .state_machine();
+
+    resumed_idle.handle(Opened, &mut ());
+    resumed_idle.handle(Closed, &mut ());
+
+    assert!(matches!(resumed_idle.state(), State::Idle {}));
 }
