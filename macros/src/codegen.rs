@@ -2,8 +2,9 @@
 
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
-use syn::{Attribute, Expr, PathArguments, Token, Type, parse_quote};
+use syn::{Attribute, Expr, Path, PathArguments, Token, Type, parse_quote};
 
+use crate::analyze::HooksModel;
 use crate::lower::{
     ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, ParentArmIr,
     ParentDispatchIr, ParentFieldIr, ParentIr, PatternIr, StateEnumIr, SuperstateIr,
@@ -165,10 +166,64 @@ fn into_state_machine_impl(machine: &MachineIr) -> TokenStream {
     let shared_storage = &machine.shared_storage;
     let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
+    let hooks = hook_methods(machine);
 
     quote! {
         impl #impl_generics ::sotu::blocking::IntoStateMachine for #shared_storage #where_clause {
             #items
+
+            #hooks
+        }
+    }
+}
+
+/// Generate the hook methods whose key is present, each delegating to the arity
+/// adapter that accepts the hook with or without a context parameter.
+///
+/// An absent key generates no method, which keeps the no-op default of the trait.
+fn hook_methods(machine: &MachineIr) -> TokenStream {
+    let HooksModel {
+        before_dispatch,
+        after_dispatch,
+    } = &machine.hooks;
+
+    let before_dispatch = before_dispatch
+        .as_ref()
+        .map(|path| dispatch_hook(machine, &format_ident!("before_dispatch"), path));
+
+    let after_dispatch = after_dispatch
+        .as_ref()
+        .map(|path| dispatch_hook(machine, &format_ident!("after_dispatch"), path));
+
+    quote! {
+        #before_dispatch
+
+        #after_dispatch
+    }
+}
+
+fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStream {
+    let MachineIr {
+        event_type,
+        context_type,
+        state,
+        superstate,
+        ..
+    } = machine;
+
+    let superstate = match superstate {
+        Some(ty) => superstate_type(ty, &quote!('_)),
+        None => quote!(()),
+    };
+
+    quote! {
+        fn #method<'ctx, 'data: 'ctx>(
+            &mut self,
+            node: ::sotu::StateOrSuperstate<'_, #state, #superstate>,
+            event: &#event_type,
+            context: &mut #context_type,
+        ) {
+            ::sotu::blocking::DispatchHook::call_dispatch_hook(&(#path), self, node, event, context)
         }
     }
 }
@@ -200,6 +255,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         state,
         superstate,
         initial,
+        hooks: _,
     } = machine;
 
     let superstate = match superstate {

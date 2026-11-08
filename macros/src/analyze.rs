@@ -3,7 +3,7 @@
 use proc_macro2::Span;
 use syn::ext::IdentExt;
 use syn::{
-    Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType, Type,
+    Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType, Path, Type,
     parse_quote,
 };
 
@@ -37,6 +37,8 @@ pub(crate) struct Model {
     pub(crate) context_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
+    /// The functions that observe dispatch.
+    pub(crate) hooks: HooksModel,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
@@ -45,6 +47,15 @@ pub(crate) struct Model {
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
+}
+
+/// The hook functions of the machine, each `None` when its key is absent.
+#[derive(Clone)]
+pub(crate) struct HooksModel {
+    /// The function called just before a node handles an event.
+    pub(crate) before_dispatch: Option<Path>,
+    /// The function called just after a node handled an event.
+    pub(crate) after_dispatch: Option<Path>,
 }
 
 /// A state handler of the machine.
@@ -258,6 +269,10 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         exit_type: arguments
             .exit
             .unwrap_or_else(|| parse_quote!(::core::convert::Infallible)),
+        hooks: HooksModel {
+            before_dispatch: arguments.before_dispatch,
+            after_dispatch: arguments.after_dispatch,
+        },
         states,
         superstates,
         actions,

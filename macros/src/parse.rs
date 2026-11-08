@@ -1,7 +1,7 @@
 //! Parse the arguments of `#[state_machine]` and of the item attributes it consumes.
 
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Expr, ExprLit, Ident, Lit, Meta, Token, Type, parenthesized, token};
+use syn::{Attribute, Expr, ExprLit, Ident, Lit, Meta, Path, Token, Type, parenthesized, token};
 
 // MARK: Errors
 
@@ -126,6 +126,10 @@ pub(crate) struct MachineArgs {
     pub(crate) context_identifier: Option<Ident>,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit: Option<Type>,
+    /// The function called just before a node handles an event.
+    pub(crate) before_dispatch: Option<Path>,
+    /// The function called just after a node handled an event.
+    pub(crate) after_dispatch: Option<Path>,
 }
 
 impl MachineArgs {
@@ -136,6 +140,8 @@ impl MachineArgs {
         "event_identifier",
         "context_identifier",
         "exit",
+        "before_dispatch",
+        "after_dispatch",
     ];
 
     /// The keys of `#[state_machine]` whose value is a type.
@@ -161,10 +167,27 @@ impl MachineArgs {
         Ok(())
     }
 
+    /// Return the field that stores the hook `key`, or `None` if `key` names no hook.
+    fn hook_slot(&mut self, key: &Ident) -> Option<&mut Option<Path>> {
+        if key == "before_dispatch" {
+            Some(&mut self.before_dispatch)
+        } else if key == "after_dispatch" {
+            Some(&mut self.after_dispatch)
+        } else {
+            None
+        }
+    }
+
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
         if key == "initial" {
             self.initial = Some(value.clone());
+
+            return Ok(());
+        }
+
+        if let Some(slot) = self.hook_slot(key) {
+            *slot = Some(path_value(value)?);
 
             return Ok(());
         }
@@ -189,6 +212,8 @@ impl Parse for MachineArgs {
             event_identifier: None,
             context_identifier: None,
             exit: None,
+            before_dispatch: None,
+            after_dispatch: None,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
@@ -476,6 +501,20 @@ fn ident_value(value: &Expr) -> syn::Result<Ident> {
     Err(syn::Error::new_spanned(value, "expected an identifier"))
 }
 
+/// Return the path written as `value`, as in `Self::record`.
+fn path_value(value: &Expr) -> syn::Result<Path> {
+    if let Expr::Path(path) = value
+        && path.qself.is_none()
+    {
+        return Ok(path.path.clone());
+    }
+
+    Err(syn::Error::new_spanned(
+        value,
+        "expected a path to a function",
+    ))
+}
+
 /// Return whether the next argument in `input` is written `local_storage(...)`.
 fn is_local_storage_list(input: ParseStream<'_>) -> bool {
     let fork = input.fork();
@@ -622,12 +661,20 @@ mod tests {
     }
 
     #[test]
-    fn machine_arguments_read_exit() {
-        let arguments: MachineArgs = syn::parse_str("initial = State::a(), exit = Done").unwrap();
+    fn machine_arguments_read_exit_and_hooks() {
+        let arguments: MachineArgs = syn::parse_str(
+            "initial = State::a(), exit = Done, before_dispatch = Self::before, \
+             after_dispatch = Self::after",
+        )
+        .unwrap();
 
         let exit = arguments.exit.unwrap();
+        let before_dispatch = arguments.before_dispatch.unwrap();
+        let after_dispatch = arguments.after_dispatch.unwrap();
 
         assert_eq!(quote!(#exit).to_string(), "Done");
+        assert_eq!(quote!(#before_dispatch).to_string(), "Self :: before");
+        assert_eq!(quote!(#after_dispatch).to_string(), "Self :: after");
     }
 
     #[test]
