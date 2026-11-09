@@ -3,8 +3,8 @@
 use proc_macro2::Span;
 use syn::ext::IdentExt;
 use syn::{
-    Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType, Path, Type,
-    Visibility, parse_quote,
+    Attribute, Expr, FnArg, Generics, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType,
+    Path, Type, Visibility, parse_quote,
 };
 
 use crate::parse::{
@@ -47,6 +47,9 @@ pub(crate) struct Model {
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
+    /// The generics and where-clause of the impl block, which every generated
+    /// trait impl declares.
+    pub(crate) generics: Generics,
     /// The visibility of the generated types and constructors.
     pub(crate) visibility: Visibility,
     /// The options of the state enum.
@@ -300,6 +303,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         states,
         superstates,
         actions,
+        generics: item.generics.clone(),
         item,
         visibility: arguments.visibility.unwrap_or_else(|| parse_quote!(pub)),
         state_type: TypeOptions {
