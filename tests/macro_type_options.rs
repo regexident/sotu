@@ -39,6 +39,45 @@ mod renamed {
     }
 }
 
+mod derived {
+    use sotu::prelude::*;
+
+    pub struct Toggle;
+
+    #[derive(Event)]
+    pub enum Event {
+        Toggle(Toggle),
+    }
+
+    pub struct Switch;
+
+    #[state_machine(
+        initial = State::idle(),
+        state(derive(Debug, PartialEq, Eq)),
+        superstate(derive(Debug))
+    )]
+    impl Switch {
+        #[state(superstate = powered)]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Toggle(_) => Transition(State::busy(1)),
+            }
+        }
+
+        #[state(superstate = powered)]
+        fn busy(load: &mut u8) -> Outcome<State> {
+            *load += 1;
+
+            Super
+        }
+
+        #[superstate]
+        fn powered() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
 mod custom {
     use sotu::prelude::*;
 
@@ -124,6 +163,22 @@ fn renamed_state_type_is_used() {
     machine.handle(renamed::Start, &mut ());
 
     assert!(matches!(machine.state(), renamed::Phase::Running {}));
+}
+
+#[test]
+fn derives_are_applied() {
+    use derived::State;
+
+    let mut machine = derived::Switch.state_machine();
+
+    assert_eq!(machine.state(), &State::Idle {});
+    assert_eq!(format!("{:?}", machine.state()), "Idle");
+
+    machine.handle(derived::Toggle, &mut ());
+
+    assert_eq!(machine.state(), &State::Busy { load: 1 });
+    assert_eq!(format!("{:?}", machine.state()), "Busy { load: 1 }");
+    assert_eq!(format!("{:?}", derived::Superstate::Powered {}), "Powered");
 }
 
 #[test]

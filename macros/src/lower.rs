@@ -1,7 +1,7 @@
 //! Resolve every name, type and call the generated code needs.
 
 use proc_macro2::Span;
-use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Type, Visibility, parse_quote};
+use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Path, Type, Visibility, parse_quote};
 
 use crate::analyze::{
     ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, StateModel,
@@ -30,6 +30,8 @@ pub(crate) struct StateEnumIr {
     pub(crate) name: Ident,
     /// The visibility of the enum and its constructors.
     pub(crate) visibility: Visibility,
+    /// The traits to derive on the enum.
+    pub(crate) derives: Vec<Path>,
     /// The variants in declaration order.
     pub(crate) variants: Vec<VariantIr>,
 }
@@ -127,6 +129,8 @@ pub(crate) struct SuperstateIr {
     pub(crate) ty: SuperstateTypeIr,
     /// The visibility of the enum and its `initial` constructors.
     pub(crate) visibility: Visibility,
+    /// The traits to derive on the enum.
+    pub(crate) derives: Vec<Path>,
     /// The variants in declaration order.
     pub(crate) variants: Vec<SuperstateVariantIr>,
     /// The type the handlers belong to.
@@ -272,6 +276,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         state_enum: (!model.state_type.custom).then(|| StateEnumIr {
             name: state.clone(),
             visibility: model.visibility.clone(),
+            derives: model.state_type.derives.clone(),
             variants: model.states.iter().map(lower_variant).collect(),
         }),
         machine: MachineIr {
@@ -377,6 +382,7 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
 
     SuperstateIr {
         visibility: model.visibility.clone(),
+        derives: model.superstate_type.derives.clone(),
         variants: model
             .superstates
             .iter()
