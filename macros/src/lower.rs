@@ -1,7 +1,7 @@
 //! Resolve every name, type and call the generated code needs.
 
 use proc_macro2::Span;
-use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Type, parse_quote};
+use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Type, Visibility, parse_quote};
 
 use crate::analyze::{
     ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, StateModel,
@@ -14,8 +14,8 @@ use crate::analyze::{
 pub(crate) struct Ir {
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
-    /// The generated state enum.
-    pub(crate) state_enum: StateEnumIr,
+    /// The generated state enum, or `None` if the user defines it.
+    pub(crate) state_enum: Option<StateEnumIr>,
     /// The associated types and `initial` of the machine traits.
     pub(crate) machine: MachineIr,
     /// The implementation of the blocking `State` trait.
@@ -28,6 +28,8 @@ pub(crate) struct Ir {
 pub(crate) struct StateEnumIr {
     /// The name of the enum.
     pub(crate) name: Ident,
+    /// The visibility of the enum and its constructors.
+    pub(crate) visibility: Visibility,
     /// The variants in declaration order.
     pub(crate) variants: Vec<VariantIr>,
 }
@@ -123,6 +125,8 @@ pub(crate) struct SuperstateTypeIr {
 pub(crate) struct SuperstateIr {
     /// The type of the enum.
     pub(crate) ty: SuperstateTypeIr,
+    /// The visibility of the enum and its `initial` constructors.
+    pub(crate) visibility: Visibility,
     /// The variants in declaration order.
     pub(crate) variants: Vec<SuperstateVariantIr>,
     /// The type the handlers belong to.
@@ -260,15 +264,16 @@ const CONTEXT: &str = "context";
 
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
-    let state = Ident::new("State", Span::call_site());
+    let state = model.state_type.name.clone();
     let superstate_type = lower_superstate_type(model);
 
     Ir {
         item: model.item.clone(),
-        state_enum: StateEnumIr {
+        state_enum: (!model.state_type.custom).then(|| StateEnumIr {
             name: state.clone(),
+            visibility: model.visibility.clone(),
             variants: model.states.iter().map(lower_variant).collect(),
-        },
+        }),
         machine: MachineIr {
             shared_storage: model.shared_storage.clone(),
             generics: model.item.generics.clone(),
@@ -354,7 +359,7 @@ fn lower_superstate_type(model: &Model) -> Option<SuperstateTypeIr> {
     }
 
     Some(SuperstateTypeIr {
-        name: Ident::new("Superstate", Span::call_site()),
+        name: model.superstate_type.name.clone(),
         has_lifetime: model
             .superstates
             .iter()
@@ -371,6 +376,7 @@ fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> Supers
     };
 
     SuperstateIr {
+        visibility: model.visibility.clone(),
         variants: model
             .superstates
             .iter()
