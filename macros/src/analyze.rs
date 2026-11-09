@@ -4,7 +4,7 @@ use proc_macro2::Span;
 use syn::ext::IdentExt;
 use syn::{
     Attribute, Expr, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType, Path, Type,
-    parse_quote,
+    Visibility, parse_quote,
 };
 
 use crate::parse::{
@@ -47,6 +47,24 @@ pub(crate) struct Model {
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
+    /// The visibility of the generated types and constructors.
+    pub(crate) visibility: Visibility,
+    /// The options of the state enum.
+    pub(crate) state_type: TypeOptions,
+    /// The options of the superstate enum.
+    pub(crate) superstate_type: TypeOptions,
+}
+
+/// The name and derives of a node enum, and whether the user defines it.
+pub(crate) struct TypeOptions {
+    /// The name of the enum.
+    pub(crate) name: Ident,
+    /// Whether the user defines the enum, which the macro then does not generate.
+    ///
+    /// Always `false` for the superstate enum.
+    pub(crate) custom: bool,
+    /// The traits to derive on the generated enum.
+    pub(crate) derives: Vec<Path>,
 }
 
 /// The hook functions of the machine, each `None` when its key is absent.
@@ -283,6 +301,23 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         superstates,
         actions,
         item,
+        visibility: arguments.visibility.unwrap_or_else(|| parse_quote!(pub)),
+        state_type: TypeOptions {
+            name: arguments
+                .state
+                .name
+                .unwrap_or_else(|| Ident::new("State", Span::call_site())),
+            custom: arguments.state.custom,
+            derives: arguments.state.derives,
+        },
+        superstate_type: TypeOptions {
+            name: arguments
+                .superstate
+                .name
+                .unwrap_or_else(|| Ident::new("Superstate", Span::call_site())),
+            custom: false,
+            derives: arguments.superstate.derives,
+        },
     })
 }
 
@@ -875,6 +910,28 @@ mod tests {
             quote!(#exit_type).to_string(),
             ":: core :: convert :: Infallible"
         );
+    }
+
+    #[test]
+    fn type_options_default_to_state_and_superstate() {
+        let model = model(parse_quote! {
+            impl Ticker {
+                #[state]
+                fn on(&mut self) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let visibility = model.visibility;
+
+        assert_eq!(quote!(#visibility).to_string(), "pub");
+        assert_eq!(model.state_type.name, ident("State"));
+        assert!(!model.state_type.custom);
+        assert!(model.state_type.derives.is_empty());
+        assert_eq!(model.superstate_type.name, ident("Superstate"));
+        assert!(!model.superstate_type.custom);
+        assert!(model.superstate_type.derives.is_empty());
     }
 
     #[test]
