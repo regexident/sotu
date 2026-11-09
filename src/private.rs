@@ -97,9 +97,12 @@ pub trait Submachine: Sized {
 
     /// The superstates of the machine, borrowing local storage from the active
     /// leaf state for `'sub`.
+    ///
+    /// The bound `Self: 'sub` covers every parameter the state type can
+    /// mention, because every parameter of an implementation appears in `Self`.
     type Superstate<'sub>
     where
-        Self::State: 'sub;
+        Self: 'sub;
 
     /// The exit points through which the machine can be left.
     type Exit;

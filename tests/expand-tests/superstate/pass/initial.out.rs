@@ -42,7 +42,7 @@ mod borrowing {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = Superstate<'sub>;
+        type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             Superstate::blinking()
@@ -106,7 +106,7 @@ mod borrowing {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = Superstate<'sub>;
+        type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             Superstate::blinking()
@@ -152,7 +152,7 @@ mod field_less {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = Superstate;
+        type Superstate<'sub> = Superstate where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             Superstate::group()
@@ -201,7 +201,7 @@ mod field_less {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = Superstate;
+        type Superstate<'sub> = Superstate where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             Superstate::group()

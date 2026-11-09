@@ -17,7 +17,7 @@ impl ::sotu::blocking::IntoStateMachine for Lamp {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = Light;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> Light {
         Light::Off {}
@@ -40,7 +40,7 @@ impl ::sotu::private::Submachine for Lamp {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = Light;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> Light {
         Light::Off {}

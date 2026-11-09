@@ -42,7 +42,7 @@ impl ::sotu::blocking::IntoStateMachine for Tracer {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Sink<'ctx, 'data>;
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::a()
@@ -119,7 +119,7 @@ impl ::sotu::private::Submachine for Tracer {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Sink<'ctx, 'data>;
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::a()

@@ -351,11 +351,11 @@ pub trait SuperstateExt<M: IntoStateMachine>: Superstate<M> {
 }
 
 // The associated type `IntoStateMachine::Superstate<'sub>` can only be named
-// where `M::State: 'sub` holds, so the impl has to carry that bound itself.
+// where `M: 'sub` holds, so the impl has to carry that bound itself.
 impl<'sub, M, S> SuperstateExt<M> for S
 where
     M: IntoStateMachine<Superstate<'sub> = S>,
-    M::State: 'sub,
+    M: 'sub,
     S: Superstate<M>,
 {
     fn depth(&mut self) -> usize {

@@ -34,7 +34,7 @@ impl ::sotu::blocking::IntoStateMachine for Gate {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::door_open(0)
@@ -57,7 +57,7 @@ impl ::sotu::private::Submachine for Gate {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::door_open(0)

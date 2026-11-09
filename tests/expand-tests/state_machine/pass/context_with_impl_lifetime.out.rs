@@ -26,7 +26,7 @@ impl<'a> ::sotu::blocking::IntoStateMachine for Tagger<'a> {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Tagged<'ctx, 'data, 'a>;
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::tagging()
@@ -48,7 +48,7 @@ impl<'a> ::sotu::private::Submachine for Tagger<'a> {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Tagged<'ctx, 'data, 'a>;
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::tagging()

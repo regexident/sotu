@@ -43,7 +43,7 @@ impl ::sotu::blocking::IntoStateMachine for Probe {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::measuring(1, 2)
@@ -88,7 +88,7 @@ impl ::sotu::private::Submachine for Probe {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::measuring(1, 2)
@@ -126,7 +126,7 @@ mod no_receiver {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::only(0)
@@ -166,7 +166,7 @@ mod no_receiver {
         type Event = ();
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::only(0)

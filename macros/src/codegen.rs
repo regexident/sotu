@@ -317,7 +317,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         type Event = #event_type;
         type Context<'ctx, 'data: 'ctx> = #context_type;
         type State = #state;
-        type Superstate<'sub> = #superstate;
+        type Superstate<'sub> = #superstate where Self: 'sub;
         type Exit = #exit_type;
 
         fn initial() -> #state {

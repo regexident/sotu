@@ -45,7 +45,7 @@ impl ::sotu::blocking::IntoStateMachine for Blinker {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Group<'sub>;
+    type Superstate<'sub> = Group<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::on(0)
@@ -96,7 +96,7 @@ impl ::sotu::private::Submachine for Blinker {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Group<'sub>;
+    type Superstate<'sub> = Group<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::on(0)

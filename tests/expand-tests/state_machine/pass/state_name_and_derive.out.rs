@@ -61,7 +61,7 @@ impl ::sotu::blocking::IntoStateMachine for Counter {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = Phase;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> Phase {
         Phase::counting(0)
@@ -83,7 +83,7 @@ impl ::sotu::private::Submachine for Counter {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = Phase;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> Phase {
         Phase::counting(0)

@@ -56,7 +56,7 @@ impl ::sotu::blocking::IntoStateMachine for Door {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::door_closed()
@@ -79,7 +79,7 @@ impl ::sotu::private::Submachine for Door {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::door_closed()
