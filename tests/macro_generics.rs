@@ -52,14 +52,14 @@ mod keeper {
 
     #[state_machine(initial = State::empty(), state(derive(PartialEq, Debug)))]
     impl<T: Copy> Keeper<T> {
-        #[state]
+        #[state(superstate = storing)]
         fn empty(event: &Event<T>) -> Outcome<State<T>> {
             match event {
                 Event::Store(Store(value)) => Transition(State::holding(*value)),
             }
         }
 
-        #[state]
+        #[state(superstate = storing)]
         fn holding(value: &mut T, event: &Event<T>) -> Outcome<State<T>> {
             match event {
                 Event::Store(Store(next)) => {
@@ -68,6 +68,11 @@ mod keeper {
                     Handled
                 }
             }
+        }
+
+        #[superstate(initial = State::empty())]
+        fn storing() -> Outcome<State<T>> {
+            Handled
         }
     }
 }
@@ -166,7 +171,11 @@ fn generic_storage_with_unused_parameter() {
 
 #[test]
 fn generic_local_storage_parameter() {
-    use keeper::{Keeper, State, Store};
+    use keeper::{Keeper, State, Store, Superstate};
+
+    // The superstate enum mentions no parameter, so its `initial` constructor
+    // declares the parameter of the state enum itself.
+    assert_eq!(Superstate::storing::<u8>(), State::Empty {});
 
     let mut machine = Keeper::<u8> {
         marker: PhantomData,

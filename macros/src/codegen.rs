@@ -157,6 +157,8 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
     let where_clause = &generics.where_clause;
     let elided = superstate_type(&superstate.ty, &quote!('_));
     let state = state_type(&superstate.state);
+    let constructor_generics = &superstate.constructor_generics;
+    let constructor_where_clause = &constructor_generics.where_clause;
     let visibility = &superstate.visibility;
     let derives = derive_attribute(&superstate.derives);
 
@@ -173,7 +175,9 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
             let initial = variant.initial.as_ref()?;
 
             Some(quote! {
-                #visibility fn #constructor() -> #state {
+                #visibility fn #constructor #constructor_generics() -> #state
+                #constructor_where_clause
+                {
                     #initial
                 }
             })
@@ -454,6 +458,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
         context_type,
         exit_type,
         state,
+        constructor_generics: _,
         shared_storage_parameter,
         event_parameter,
         context_parameter,
