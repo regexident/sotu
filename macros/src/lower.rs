@@ -26,8 +26,8 @@ pub(crate) struct Ir {
 
 /// The generated state enum and its constructors.
 pub(crate) struct StateEnumIr {
-    /// The name of the enum.
-    pub(crate) name: Ident,
+    /// The type of the enum.
+    pub(crate) ty: NodeTypeIr,
     /// The visibility of the enum and its constructors.
     pub(crate) visibility: Visibility,
     /// The traits to derive on the enum.
@@ -70,10 +70,10 @@ pub(crate) struct MachineIr {
     pub(crate) context_type: Type,
     /// The type of the exit points of the machine.
     pub(crate) exit_type: Type,
-    /// The name of the state enum.
-    pub(crate) state: Ident,
+    /// The type of the state enum.
+    pub(crate) state: NodeTypeIr,
     /// The superstate enum, or `None` if the associated type is `()`.
-    pub(crate) superstate: Option<SuperstateTypeIr>,
+    pub(crate) superstate: Option<NodeTypeIr>,
     /// The expression that builds the initial state.
     pub(crate) initial: Expr,
     /// The hook functions, which only `IntoStateMachine` declares.
@@ -92,8 +92,8 @@ pub(crate) struct DispatchIr {
     pub(crate) context_type: Type,
     /// The type of the exit points of the machine.
     pub(crate) exit_type: Type,
-    /// The name of the state enum.
-    pub(crate) state: Ident,
+    /// The type of the state enum.
+    pub(crate) state: NodeTypeIr,
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
     /// The name of the event parameter, underscored when unused.
@@ -110,23 +110,23 @@ pub(crate) struct DispatchIr {
     pub(crate) parents: Option<ParentDispatchIr>,
 }
 
-/// The name of the superstate enum and whether it takes the lifetime `'sub`.
+/// The name of a node enum and the parameters it declares.
 ///
-/// An enum without borrowed fields can not declare the lifetime, because an
-/// unused lifetime parameter is a compile error.
+/// The superstate enum declares `'sub` only when any of its variants borrows a
+/// field, because an unused parameter is a compile error.
 #[derive(Clone)]
-pub(crate) struct SuperstateTypeIr {
+pub(crate) struct NodeTypeIr {
     /// The name of the enum.
     pub(crate) name: Ident,
-    /// Whether any variant has a borrowed field.
-    pub(crate) has_lifetime: bool,
+    /// The parameters of the enum.
+    pub(crate) generics: Generics,
 }
 
 /// The generated superstate enum and the implementation of the blocking
 /// `Superstate` trait.
 pub(crate) struct SuperstateIr {
     /// The type of the enum.
-    pub(crate) ty: SuperstateTypeIr,
+    pub(crate) ty: NodeTypeIr,
     /// The visibility of the enum and its `initial` constructors.
     pub(crate) visibility: Visibility,
     /// The traits to derive on the enum.
@@ -143,8 +143,8 @@ pub(crate) struct SuperstateIr {
     pub(crate) context_type: Type,
     /// The type of the exit points of the machine.
     pub(crate) exit_type: Type,
-    /// The name of the state enum.
-    pub(crate) state: Ident,
+    /// The type of the state enum.
+    pub(crate) state: NodeTypeIr,
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
     /// The name of the event parameter, underscored when unused.
@@ -204,7 +204,7 @@ pub(crate) struct ActionArmIr {
 /// The method that builds the superstate enclosing a node.
 pub(crate) struct ParentDispatchIr {
     /// The type of the superstate enum.
-    pub(crate) superstate: SuperstateTypeIr,
+    pub(crate) superstate: NodeTypeIr,
     /// One match arm per variant, in declaration order.
     pub(crate) arms: Vec<ParentArmIr>,
 }
@@ -268,13 +268,17 @@ const CONTEXT: &str = "context";
 
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
-    let state = model.state_type.name.clone();
+    let state = NodeTypeIr {
+        name: model.state_type.name.clone(),
+        generics: Generics::default(),
+    };
+
     let superstate_type = lower_superstate_type(model);
 
     Ir {
         item: model.item.clone(),
         state_enum: (!model.state_type.custom).then(|| StateEnumIr {
-            name: state.clone(),
+            ty: state.clone(),
             visibility: model.visibility.clone(),
             derives: model.state_type.derives.clone(),
             variants: model.states.iter().map(lower_variant).collect(),
@@ -358,21 +362,27 @@ fn lower_arm(
 // MARK: Superstates
 
 /// Return the type of the superstate enum, or `None` if the machine has no superstates.
-fn lower_superstate_type(model: &Model) -> Option<SuperstateTypeIr> {
+fn lower_superstate_type(model: &Model) -> Option<NodeTypeIr> {
     if model.superstates.is_empty() {
         return None;
     }
 
-    Some(SuperstateTypeIr {
+    let has_lifetime = model
+        .superstates
+        .iter()
+        .any(|superstate| !superstate.fields.is_empty());
+
+    Some(NodeTypeIr {
         name: model.superstate_type.name.clone(),
-        has_lifetime: model
-            .superstates
-            .iter()
-            .any(|superstate| !superstate.fields.is_empty()),
+        generics: if has_lifetime {
+            parse_quote!(<'sub>)
+        } else {
+            Generics::default()
+        },
     })
 }
 
-fn lower_superstate(model: &Model, ty: SuperstateTypeIr, state: Ident) -> SuperstateIr {
+fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> SuperstateIr {
     let takes = |input: &InputKind| {
         model
             .superstates
@@ -430,7 +440,7 @@ fn lower_superstate_variant(superstate: &SuperstateModel) -> SuperstateVariantIr
 
 // MARK: Parents
 
-fn lower_state_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDispatchIr {
+fn lower_state_parents(model: &Model, superstate: NodeTypeIr) -> ParentDispatchIr {
     ParentDispatchIr {
         superstate,
         arms: model
@@ -445,7 +455,7 @@ fn lower_state_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDis
     }
 }
 
-fn lower_superstate_parents(model: &Model, superstate: SuperstateTypeIr) -> ParentDispatchIr {
+fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDispatchIr {
     ParentDispatchIr {
         superstate,
         arms: model
