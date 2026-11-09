@@ -63,7 +63,7 @@ mod entry_only {
         type Event = Event;
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::on(0, false)
@@ -98,7 +98,7 @@ mod entry_only {
         type Event = Event;
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::on(0, false)
@@ -156,7 +156,7 @@ mod exit_only {
         type Event = Event;
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::first(1)
@@ -189,7 +189,7 @@ mod exit_only {
         type Event = Event;
         type Context<'ctx, 'data: 'ctx> = ();
         type State = State;
-        type Superstate<'sub> = ();
+        type Superstate<'sub> = () where Self: 'sub;
         type Exit = ::core::convert::Infallible;
         fn initial() -> State {
             State::first(1)

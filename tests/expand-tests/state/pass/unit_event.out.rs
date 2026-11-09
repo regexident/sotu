@@ -29,7 +29,7 @@ impl ::sotu::blocking::IntoStateMachine for Ticker {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::ticking()
@@ -51,7 +51,7 @@ impl ::sotu::private::Submachine for Ticker {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::ticking()

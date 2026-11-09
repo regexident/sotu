@@ -71,7 +71,7 @@ impl ::sotu::blocking::IntoStateMachine for Gauge {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate<'sub>;
+    type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::measuring(0, 1, 'a')
@@ -143,7 +143,7 @@ impl ::sotu::private::Submachine for Gauge {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate<'sub>;
+    type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::measuring(0, 1, 'a')

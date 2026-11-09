@@ -26,7 +26,7 @@ impl ::sotu::blocking::IntoStateMachine for Finisher {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = Done;
     fn initial() -> State {
         State::running()
@@ -75,7 +75,7 @@ impl ::sotu::private::Submachine for Finisher {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = Done;
     fn initial() -> State {
         State::running()

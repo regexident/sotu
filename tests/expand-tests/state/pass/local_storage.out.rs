@@ -69,7 +69,7 @@ impl ::sotu::blocking::IntoStateMachine for Meter {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::counting(0, 1, false)
@@ -97,7 +97,7 @@ impl ::sotu::private::Submachine for Meter {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::counting(0, 1, false)

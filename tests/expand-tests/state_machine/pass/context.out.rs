@@ -39,7 +39,7 @@ impl ::sotu::blocking::IntoStateMachine for Writer {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Sink<'ctx, 'data>;
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::writing()
@@ -110,7 +110,7 @@ impl ::sotu::private::Submachine for Writer {
     type Event = ();
     type Context<'ctx, 'data: 'ctx> = Sink<'ctx, 'data>;
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::writing()

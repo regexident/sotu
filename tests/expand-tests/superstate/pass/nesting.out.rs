@@ -58,7 +58,7 @@ impl ::sotu::blocking::IntoStateMachine for Hierarchy {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::leaf()
@@ -115,7 +115,7 @@ impl ::sotu::private::Submachine for Hierarchy {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate;
+    type Superstate<'sub> = Superstate where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::leaf()

@@ -137,7 +137,7 @@ impl ::sotu::blocking::IntoStateMachine for Switch {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::off()
@@ -160,7 +160,7 @@ impl ::sotu::private::Submachine for Switch {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = ();
+    type Superstate<'sub> = () where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::off()

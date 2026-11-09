@@ -48,7 +48,7 @@ impl ::sotu::blocking::IntoStateMachine for Linked {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate<'sub>;
+    type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::member(0)
@@ -101,7 +101,7 @@ impl ::sotu::private::Submachine for Linked {
     type Event = Event;
     type Context<'ctx, 'data: 'ctx> = ();
     type State = State;
-    type Superstate<'sub> = Superstate<'sub>;
+    type Superstate<'sub> = Superstate<'sub> where Self: 'sub;
     type Exit = ::core::convert::Infallible;
     fn initial() -> State {
         State::member(0)
