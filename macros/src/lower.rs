@@ -1,7 +1,14 @@
 //! Resolve every name, type and call the generated code needs.
 
+use std::collections::HashSet;
+
 use proc_macro2::Span;
-use syn::{Attribute, Expr, Generics, Ident, ItemImpl, Path, Type, Visibility, parse_quote};
+use syn::punctuated::Punctuated;
+use syn::visit::{self, Visit};
+use syn::{
+    Attribute, Expr, GenericParam, Generics, Ident, ItemImpl, Lifetime, Path, Token, Type,
+    Visibility, WhereClause, WherePredicate, parse_quote,
+};
 
 use crate::analyze::{
     ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, StateModel,
@@ -112,13 +119,15 @@ pub(crate) struct DispatchIr {
 
 /// The name of a node enum and the parameters it declares.
 ///
-/// The superstate enum declares `'sub` only when any of its variants borrows a
-/// field, because an unused parameter is a compile error.
+/// An enum declares only the parameters of the impl block that its fields
+/// mention, because an unused parameter is a compile error. The superstate enum
+/// declares `'sub` first when any of its variants borrows a field.
 #[derive(Clone)]
 pub(crate) struct NodeTypeIr {
     /// The name of the enum.
     pub(crate) name: Ident,
-    /// The parameters of the enum.
+    /// The parameters of the enum with their bounds, and the where-predicates
+    /// that mention only those parameters.
     pub(crate) generics: Generics,
 }
 
@@ -270,7 +279,7 @@ const CONTEXT: &str = "context";
 pub(crate) fn lower(model: &Model) -> Ir {
     let state = NodeTypeIr {
         name: model.state_type.name.clone(),
-        generics: Generics::default(),
+        generics: state_generics(model),
     };
 
     let superstate_type = lower_superstate_type(model);
@@ -359,6 +368,172 @@ fn lower_arm(
     }
 }
 
+// MARK: Generics
+
+/// The names a syntax tree mentions that may refer to generic parameters.
+#[derive(Default)]
+struct Mentions {
+    /// The identifiers of the lifetimes, such as `a` for `'a`.
+    lifetimes: HashSet<Ident>,
+    /// The first segments of relative paths, which name type and const
+    /// parameters, as in `T`, `T::Item` or `N`.
+    paths: HashSet<Ident>,
+}
+
+impl Mentions {
+    /// Collect the names that `visit` reaches.
+    fn collect(visit: impl FnOnce(&mut Self)) -> Self {
+        let mut mentions = Self::default();
+
+        visit(&mut mentions);
+
+        mentions
+    }
+
+    /// Return whether `parameter` is among the mentioned names.
+    fn contains(&self, parameter: &GenericParam) -> bool {
+        match parameter {
+            GenericParam::Lifetime(lifetime) => self.lifetimes.contains(&lifetime.lifetime.ident),
+            GenericParam::Type(ty) => self.paths.contains(&ty.ident),
+            GenericParam::Const(constant) => self.paths.contains(&constant.ident),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Mentions {
+    fn visit_lifetime(&mut self, lifetime: &'ast Lifetime) {
+        self.lifetimes.insert(lifetime.ident.clone());
+    }
+
+    fn visit_path(&mut self, path: &'ast Path) {
+        if path.leading_colon.is_none()
+            && let Some(first) = path.segments.first()
+        {
+            self.paths.insert(first.ident.clone());
+        }
+
+        visit::visit_path(self, path);
+    }
+}
+
+/// Return the parameters of the impl block that the fields of the states mention.
+fn state_generics(model: &Model) -> Generics {
+    let fields = model.states.iter().flat_map(|state| &state.fields);
+
+    select_generics(&model.generics, fields.map(|field| &field.ty))
+}
+
+/// Return `'sub` and the parameters of the impl block that the fields of the
+/// superstates mention.
+///
+/// Every borrowed field mentions `'sub`, so the enum declares it exactly when a
+/// variant borrows a field, and declares it first, ahead of the parameters of
+/// the impl block.
+fn superstate_generics(model: &Model) -> Generics {
+    let mut candidates = model.generics.clone();
+
+    candidates.params.insert(0, parse_quote!('sub));
+
+    let fields = model
+        .superstates
+        .iter()
+        .flat_map(|superstate| &superstate.fields);
+
+    select_generics(&candidates, fields.map(|field| &field.ty))
+}
+
+/// Return the parameters of `candidates` that `types` mention, in declaration
+/// order.
+///
+/// A bound or where-predicate is kept when every candidate it mentions is
+/// selected, because it would otherwise name a parameter that the generated
+/// type does not declare.
+fn select_generics<'ty>(candidates: &Generics, types: impl Iterator<Item = &'ty Type>) -> Generics {
+    let used = Mentions::collect(|mentions| {
+        for ty in types {
+            mentions.visit_type(ty);
+        }
+    });
+
+    let is_declared = |mentions: &Mentions| {
+        candidates
+            .params
+            .iter()
+            .all(|parameter| !mentions.contains(parameter) || used.contains(parameter))
+    };
+
+    let params = candidates
+        .params
+        .iter()
+        .filter(|parameter| used.contains(parameter))
+        .map(|parameter| retain_bounds(parameter, is_declared))
+        .collect();
+
+    let predicates: Punctuated<WherePredicate, Token![,]> = candidates
+        .where_clause
+        .iter()
+        .flat_map(|where_clause| &where_clause.predicates)
+        .filter(|predicate| {
+            is_declared(&Mentions::collect(|mentions| {
+                mentions.visit_where_predicate(predicate);
+            }))
+        })
+        .cloned()
+        .collect();
+
+    Generics {
+        params,
+        where_clause: where_predicates(predicates),
+        ..Generics::default()
+    }
+}
+
+/// Return `parameter` with only the bounds for which `is_declared` holds.
+fn retain_bounds(
+    parameter: &GenericParam,
+    is_declared: impl Fn(&Mentions) -> bool,
+) -> GenericParam {
+    let mut parameter = parameter.clone();
+
+    match &mut parameter {
+        GenericParam::Lifetime(lifetime) => {
+            lifetime.bounds = lifetime
+                .bounds
+                .iter()
+                .filter(|bound| {
+                    is_declared(&Mentions::collect(|mentions| {
+                        mentions.visit_lifetime(bound);
+                    }))
+                })
+                .cloned()
+                .collect();
+        }
+        GenericParam::Type(ty) => {
+            ty.bounds = ty
+                .bounds
+                .iter()
+                .filter(|bound| {
+                    is_declared(&Mentions::collect(|mentions| {
+                        mentions.visit_type_param_bound(bound);
+                    }))
+                })
+                .cloned()
+                .collect();
+        }
+        GenericParam::Const(_) => {}
+    }
+
+    parameter
+}
+
+/// Return a where-clause of `predicates`, or `None` without predicates.
+fn where_predicates(predicates: Punctuated<WherePredicate, Token![,]>) -> Option<WhereClause> {
+    (!predicates.is_empty()).then(|| WhereClause {
+        where_token: <Token![where]>::default(),
+        predicates,
+    })
+}
+
 // MARK: Superstates
 
 /// Return the type of the superstate enum, or `None` if the machine has no superstates.
@@ -367,18 +542,9 @@ fn lower_superstate_type(model: &Model) -> Option<NodeTypeIr> {
         return None;
     }
 
-    let has_lifetime = model
-        .superstates
-        .iter()
-        .any(|superstate| !superstate.fields.is_empty());
-
     Some(NodeTypeIr {
         name: model.superstate_type.name.clone(),
-        generics: if has_lifetime {
-            parse_quote!(<'sub>)
-        } else {
-            Generics::default()
-        },
+        generics: superstate_generics(model),
     })
 }
 
@@ -668,4 +834,78 @@ fn parameter(name: &str, is_used: bool) -> Ident {
 /// name, which the match arms bind with the span of the user's code.
 fn generated_ident(name: &str) -> Ident {
     Ident::new(name, Span::mixed_site())
+}
+
+// MARK: Tests
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+
+    use super::*;
+    use crate::analyze::analyze;
+    use crate::parse::MachineArgs;
+
+    fn model(item: ItemImpl) -> Model {
+        let arguments: MachineArgs = match syn::parse_str("initial = State::empty()") {
+            Ok(arguments) => arguments,
+            Err(error) => panic!("parsing failed: {error}"),
+        };
+
+        match analyze(arguments, item) {
+            Ok(model) => model,
+            Err(error) => panic!("analysis failed: {error}"),
+        }
+    }
+
+    #[test]
+    fn generated_types_select_used_parameters() {
+        let model = model(parse_quote! {
+            impl<T: Copy, U> Machine<T, U> {
+                #[state]
+                fn empty(count: &mut u8) -> Outcome<State<T>> {
+                    Handled
+                }
+
+                #[state(superstate = group)]
+                fn holding(value: &mut T, count: &mut u8) -> Outcome<State<T>> {
+                    Super
+                }
+
+                #[superstate]
+                fn group(count: &mut u8) -> Outcome<State<T>> {
+                    Handled
+                }
+            }
+        });
+
+        let state = state_generics(&model);
+        let superstate = superstate_generics(&model);
+
+        assert_eq!(quote!(#state).to_string(), "< T : Copy >");
+        assert_eq!(quote!(#superstate).to_string(), "< 'sub >");
+    }
+
+    #[test]
+    fn where_predicates_follow_selected_parameters() {
+        let model = model(parse_quote! {
+            impl<T, U> Machine<T, U>
+            where
+                T: Copy,
+                U: Default,
+                T: Into<U>,
+            {
+                #[state]
+                fn empty(value: &mut T) -> Outcome<State<T>> {
+                    Handled
+                }
+            }
+        });
+
+        let state = state_generics(&model);
+        let where_clause = &state.where_clause;
+
+        assert_eq!(quote!(#state).to_string(), "< T >");
+        assert_eq!(quote!(#where_clause).to_string(), "where T : Copy");
+    }
 }
