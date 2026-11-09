@@ -45,6 +45,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
 fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
     let name = &state_enum.name;
     let visibility = &state_enum.visibility;
+    let derives = derive_attribute(&state_enum.derives);
 
     let variants = state_enum
         .variants
@@ -76,6 +77,7 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
     });
 
     quote! {
+        #derives
         #visibility enum #name {
             #(#variants,)*
         }
@@ -84,6 +86,11 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
             #(#constructors)*
         }
     }
+}
+
+/// Generate the `#[derive(...)]` attribute of a node enum, or nothing without `derives`.
+fn derive_attribute(derives: &[Path]) -> Option<TokenStream> {
+    (!derives.is_empty()).then(|| quote!(#[derive(#(#derives),*)]))
 }
 
 fn enum_variant(docs: &[Attribute], name: &Ident, fields: &[FieldIr]) -> TokenStream {
@@ -124,6 +131,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
     let elided = superstate_type(&superstate.ty, &quote!('_));
     let state = &superstate.state;
     let visibility = &superstate.visibility;
+    let derives = derive_attribute(&superstate.derives);
 
     let variants = superstate
         .variants
@@ -154,6 +162,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
     });
 
     quote! {
+        #derives
         #visibility enum #declared {
             #(#variants,)*
         }
@@ -394,6 +403,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let SuperstateIr {
         ty,
         visibility: _,
+        derives: _,
         variants,
         shared_storage,
         generics,
