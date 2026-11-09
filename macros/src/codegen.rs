@@ -16,7 +16,7 @@ use crate::lower::{
 /// Generate the impl block, the node enums and the trait implementations of a machine.
 pub(crate) fn generate(ir: &Ir) -> TokenStream {
     let item = &ir.item;
-    let state_enum = state_enum(&ir.state_enum);
+    let state_enum = ir.state_enum.as_ref().map(state_enum);
     let superstate_enum = ir.superstate.as_ref().map(superstate_enum);
     let into_state_machine = into_state_machine_impl(&ir.machine);
     let dispatch = dispatch_impl(&ir.dispatch);
@@ -44,6 +44,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
 
 fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
     let name = &state_enum.name;
+    let visibility = &state_enum.visibility;
 
     let variants = state_enum
         .variants
@@ -66,7 +67,7 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
             .map(|field| field_initializer(&field.name, field.default.as_ref()));
 
         quote! {
-            pub fn #constructor(#(#parameters),*) -> Self {
+            #visibility fn #constructor(#(#parameters),*) -> Self {
                 Self::#variant_name {
                     #(#initializers),*
                 }
@@ -75,7 +76,7 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
     });
 
     quote! {
-        pub enum #name {
+        #visibility enum #name {
             #(#variants,)*
         }
 
@@ -122,6 +123,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
     let declared = superstate_type(&superstate.ty, &quote!('sub));
     let elided = superstate_type(&superstate.ty, &quote!('_));
     let state = &superstate.state;
+    let visibility = &superstate.visibility;
 
     let variants = superstate
         .variants
@@ -136,7 +138,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
             let initial = variant.initial.as_ref()?;
 
             Some(quote! {
-                pub fn #constructor() -> #state {
+                #visibility fn #constructor() -> #state {
                     #initial
                 }
             })
@@ -152,7 +154,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
     });
 
     quote! {
-        pub enum #declared {
+        #visibility enum #declared {
             #(#variants,)*
         }
 
@@ -391,6 +393,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
 fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let SuperstateIr {
         ty,
+        visibility: _,
         variants,
         shared_storage,
         generics,
