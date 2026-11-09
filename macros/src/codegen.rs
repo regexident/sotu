@@ -1,14 +1,13 @@
 //! Turn the lowered machine into tokens.
 
 use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, quote};
-use syn::{Attribute, Expr, Path, PathArguments, Token, Type, parse_quote};
+use quote::{ToTokens, format_ident, quote};
+use syn::{Attribute, Expr, GenericParam, Path, PathArguments, Token, Type, parse_quote};
 
 use crate::analyze::HooksModel;
 use crate::lower::{
-    ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, ParentArmIr,
-    ParentDispatchIr, ParentFieldIr, ParentIr, PatternIr, StateEnumIr, SuperstateIr,
-    SuperstateTypeIr,
+    ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, NodeTypeIr,
+    ParentArmIr, ParentDispatchIr, ParentFieldIr, ParentIr, PatternIr, StateEnumIr, SuperstateIr,
 };
 
 // MARK: Generation
@@ -43,7 +42,9 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
 // MARK: State Enum
 
 fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
-    let name = &state_enum.name;
+    let name = &state_enum.ty.name;
+    let generics = &state_enum.ty.generics;
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
     let visibility = &state_enum.visibility;
     let derives = derive_attribute(&state_enum.derives);
 
@@ -78,14 +79,22 @@ fn state_enum(state_enum: &StateEnumIr) -> TokenStream {
 
     quote! {
         #derives
-        #visibility enum #name {
+        #visibility enum #name #generics #where_clause {
             #(#variants,)*
         }
 
-        impl #name {
+        impl #impl_generics #name #type_generics #where_clause {
             #(#constructors)*
         }
     }
+}
+
+/// Return the tokens that name the state enum with its parameters, as in `State<T>`.
+fn state_type(ty: &NodeTypeIr) -> TokenStream {
+    let name = &ty.name;
+    let (_, type_generics, _) = ty.generics.split_for_impl();
+
+    quote!(#name #type_generics)
 }
 
 /// Generate the `#[derive(...)]` attribute of a node enum, or nothing without `derives`.
@@ -115,21 +124,39 @@ fn field_initializer(name: &Ident, value: Option<&Expr>) -> TokenStream {
 
 // MARK: Superstate Enum
 
-/// Return the tokens that name the superstate enum, using `lifetime` if it takes one.
-fn superstate_type(ty: &SuperstateTypeIr, lifetime: &TokenStream) -> TokenStream {
+/// Return whether the superstate enum declares `'sub`, which is then its first parameter.
+fn has_lifetime(ty: &NodeTypeIr) -> bool {
+    matches!(
+        ty.generics.params.first(),
+        Some(GenericParam::Lifetime(parameter)) if parameter.lifetime.ident == "sub"
+    )
+}
+
+/// Return the tokens that name the superstate enum with its parameters, using
+/// `lifetime` in place of `'sub`, as in `Superstate<'_, T>`.
+fn superstate_type(ty: &NodeTypeIr, lifetime: &TokenStream) -> TokenStream {
     let name = &ty.name;
 
-    if ty.has_lifetime {
-        quote!(#name<#lifetime>)
-    } else {
-        quote!(#name)
+    if ty.generics.params.is_empty() {
+        return quote!(#name);
     }
+
+    let arguments = ty.generics.params.iter().map(|parameter| match parameter {
+        GenericParam::Lifetime(parameter) if parameter.lifetime.ident == "sub" => lifetime.clone(),
+        GenericParam::Lifetime(parameter) => parameter.lifetime.to_token_stream(),
+        GenericParam::Type(parameter) => parameter.ident.to_token_stream(),
+        GenericParam::Const(parameter) => parameter.ident.to_token_stream(),
+    });
+
+    quote!(#name<#(#arguments),*>)
 }
 
 fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
-    let declared = superstate_type(&superstate.ty, &quote!('sub));
+    let name = &superstate.ty.name;
+    let generics = &superstate.ty.generics;
+    let where_clause = &generics.where_clause;
     let elided = superstate_type(&superstate.ty, &quote!('_));
-    let state = &superstate.state;
+    let state = state_type(&superstate.state);
     let visibility = &superstate.visibility;
     let derives = derive_attribute(&superstate.derives);
 
@@ -154,8 +181,17 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
         .collect();
 
     let constructor_impl = (!constructors.is_empty()).then(|| {
+        // The impl names the enum with `'_`, so it declares every parameter but `'sub`.
+        let mut impl_generics = generics.clone();
+
+        if has_lifetime(&superstate.ty) {
+            impl_generics.params = impl_generics.params.into_iter().skip(1).collect();
+        }
+
+        let (impl_generics, _, _) = impl_generics.split_for_impl();
+
         quote! {
-            impl #elided {
+            impl #impl_generics #elided #where_clause {
                 #(#constructors)*
             }
         }
@@ -163,7 +199,7 @@ fn superstate_enum(superstate: &SuperstateIr) -> TokenStream {
 
     quote! {
         #derives
-        #visibility enum #declared {
+        #visibility enum #name #generics #where_clause {
             #(#variants,)*
         }
 
@@ -236,6 +272,8 @@ fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStrea
         ..
     } = machine;
 
+    let state = state_type(state);
+
     let superstate = match superstate {
         Some(ty) => superstate_type(ty, &quote!('_)),
         None => quote!(()),
@@ -259,6 +297,8 @@ fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStr
         state,
         ..
     } = machine;
+
+    let state = state_type(state);
 
     quote! {
         fn #method<'ctx, 'data: 'ctx>(
@@ -308,6 +348,8 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         hooks: _,
     } = machine;
 
+    let state = state_type(state);
+
     let superstate = match superstate {
         Some(ty) => superstate_type(ty, &quote!('sub)),
         None => quote!(()),
@@ -345,13 +387,16 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         parents,
     } = dispatch;
 
+    let name = &state.name;
+    let state = state_type(state);
+
     let arms = arms
         .iter()
-        .map(|arm| dispatch_arm(state, shared_storage, arm));
+        .map(|arm| dispatch_arm(name, shared_storage, arm));
 
     let entry_action = entry_actions.as_ref().map(|actions| {
         action_method(
-            state,
+            name,
             shared_storage,
             context_type,
             &format_ident!("call_entry_action"),
@@ -361,7 +406,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
 
     let exit_action = exit_actions.as_ref().map(|actions| {
         action_method(
-            state,
+            name,
             shared_storage,
             context_type,
             &format_ident!("call_exit_action"),
@@ -369,9 +414,7 @@ fn dispatch_impl(dispatch: &DispatchIr) -> TokenStream {
         )
     });
 
-    let parents = parents
-        .as_ref()
-        .map(|parents| parent_method(state, parents));
+    let parents = parents.as_ref().map(|parents| parent_method(name, parents));
 
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
@@ -423,9 +466,10 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr) -> TokenStream {
     let name = &ty.name;
     let declared = superstate_type(ty, &quote!('sub));
     let elided = superstate_type(ty, &quote!('_));
+    let state = state_type(state);
     let mut generics = generics.clone();
 
-    if ty.has_lifetime {
+    if has_lifetime(ty) {
         generics.params.insert(0, parse_quote!('sub));
     }
 
