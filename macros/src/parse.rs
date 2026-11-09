@@ -1,7 +1,9 @@
 //! Parse the arguments of `#[state_machine]` and of the item attributes it consumes.
 
 use syn::parse::{Parse, ParseStream};
-use syn::{Attribute, Expr, ExprLit, Ident, Lit, Meta, Path, Token, Type, parenthesized, token};
+use syn::{
+    Attribute, Expr, ExprLit, Ident, Lit, Meta, Path, Token, Type, Visibility, parenthesized, token,
+};
 
 // MARK: Errors
 
@@ -134,6 +136,8 @@ pub(crate) struct MachineArgs {
     pub(crate) before_transition: Option<Path>,
     /// The function called just after a transition ran its entry actions.
     pub(crate) after_transition: Option<Path>,
+    /// The visibility of the generated types and constructors.
+    pub(crate) visibility: Option<Visibility>,
 }
 
 impl MachineArgs {
@@ -148,6 +152,7 @@ impl MachineArgs {
         "after_dispatch",
         "before_transition",
         "after_transition",
+        "visibility",
     ];
 
     /// The keys of `#[state_machine]` whose value is a type.
@@ -188,6 +193,20 @@ impl MachineArgs {
         }
     }
 
+    /// Store the `visibility = vis` argument `key`, reporting a duplicate.
+    fn set_visibility(&mut self, key: &Ident, visibility: Visibility) -> syn::Result<()> {
+        if self.visibility.is_some() {
+            return Err(syn::Error::new_spanned(
+                key,
+                format!("duplicate `{key}` item"),
+            ));
+        }
+
+        self.visibility = Some(visibility);
+
+        Ok(())
+    }
+
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
         if key == "initial" {
@@ -226,6 +245,7 @@ impl Parse for MachineArgs {
             after_dispatch: None,
             before_transition: None,
             after_transition: None,
+            visibility: None,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
@@ -233,8 +253,26 @@ impl Parse for MachineArgs {
 
         // A syntax error leaves the stream in an unknown position, so it ends the
         // loop while keeping the errors found so far. The context and exit are
-        // types, which do not parse as the expression every other value is.
+        // types and the visibility is a visibility, none of which parse as the
+        // expression every other value is.
         while !input.is_empty() {
+            if is_type_argument(input, "visibility") {
+                match parse_visibility_argument(input) {
+                    Ok((key, visibility)) => {
+                        if let Err(error) = arguments.set_visibility(&key, visibility) {
+                            push_error(&mut errors, error);
+                        }
+                    }
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
             if Self::TYPE_KEYS
                 .iter()
                 .any(|key| is_type_argument(input, key))
@@ -285,6 +323,21 @@ fn is_type_argument(input: ParseStream<'_>, key: &str) -> bool {
     let fork = input.fork();
 
     fork.parse::<Ident>().is_ok_and(|ident| ident == key) && fork.peek(Token![=])
+}
+
+/// Parse one `visibility = vis` argument and the comma that separates it from the next.
+fn parse_visibility_argument(input: ParseStream<'_>) -> syn::Result<(Ident, Visibility)> {
+    let key: Ident = input.parse()?;
+
+    input.parse::<Token![=]>()?;
+
+    let visibility: Visibility = input.parse()?;
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok((key, visibility))
 }
 
 /// Parse one `key = Type` argument and the comma that separates it from the next.
@@ -692,6 +745,16 @@ mod tests {
         assert_eq!(quote!(#after_dispatch).to_string(), "Self :: after");
         assert_eq!(quote!(#before_transition).to_string(), "Self :: leaving");
         assert_eq!(quote!(#after_transition).to_string(), "Self :: arrived");
+    }
+
+    #[test]
+    fn machine_arguments_read_type_options() {
+        let arguments: MachineArgs =
+            syn::parse_str("initial = MyState::a(), visibility = pub(crate)").unwrap();
+
+        let visibility = arguments.visibility.unwrap();
+
+        assert_eq!(quote!(#visibility).to_string(), "pub (crate)");
     }
 
     #[test]
