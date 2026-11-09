@@ -154,6 +154,9 @@ pub(crate) struct SuperstateIr {
     pub(crate) exit_type: Type,
     /// The type of the state enum.
     pub(crate) state: NodeTypeIr,
+    /// The parameters of the state enum that the superstate enum does not
+    /// declare, which the `initial` constructors declare themselves.
+    pub(crate) constructor_generics: Generics,
     /// The name of the shared storage parameter, underscored when unused.
     pub(crate) shared_storage_parameter: Ident,
     /// The name of the event parameter, underscored when unused.
@@ -390,6 +393,25 @@ impl Mentions {
         mentions
     }
 
+    /// Collect the names that the parameters of `generics` declare.
+    fn declared_by(generics: &Generics) -> Self {
+        Self::collect(|mentions| {
+            for parameter in &generics.params {
+                match parameter {
+                    GenericParam::Lifetime(lifetime) => {
+                        mentions.lifetimes.insert(lifetime.lifetime.ident.clone());
+                    }
+                    GenericParam::Type(ty) => {
+                        mentions.paths.insert(ty.ident.clone());
+                    }
+                    GenericParam::Const(constant) => {
+                        mentions.paths.insert(constant.ident.clone());
+                    }
+                }
+            }
+        })
+    }
+
     /// Return whether `parameter` is among the mentioned names.
     fn contains(&self, parameter: &GenericParam) -> bool {
         match parameter {
@@ -526,6 +548,43 @@ fn retain_bounds(
     parameter
 }
 
+/// Return the parameters of the state enum that the superstate enum does not
+/// declare, with the where-predicates that mention them.
+///
+/// The `initial` constructors of the superstate enum return the state enum, but
+/// their impl can only declare parameters of the superstate enum, so each
+/// constructor declares the remaining ones itself.
+fn constructor_generics(state: &Generics, superstate: &Generics) -> Generics {
+    let outer = Mentions::declared_by(superstate);
+
+    let params: Punctuated<GenericParam, Token![,]> = state
+        .params
+        .iter()
+        .filter(|parameter| !outer.contains(parameter))
+        .cloned()
+        .collect();
+
+    let predicates = state
+        .where_clause
+        .iter()
+        .flat_map(|where_clause| &where_clause.predicates)
+        .filter(|predicate| {
+            let mentions = Mentions::collect(|mentions| {
+                mentions.visit_where_predicate(predicate);
+            });
+
+            params.iter().any(|parameter| mentions.contains(parameter))
+        })
+        .cloned()
+        .collect();
+
+    Generics {
+        params,
+        where_clause: where_predicates(predicates),
+        ..Generics::default()
+    }
+}
+
 /// Return a where-clause of `predicates`, or `None` without predicates.
 fn where_predicates(predicates: Punctuated<WherePredicate, Token![,]>) -> Option<WhereClause> {
     (!predicates.is_empty()).then(|| WhereClause {
@@ -569,6 +628,7 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
         event_type: model.event_type.clone(),
         context_type: model.context_type.clone(),
         exit_type: model.exit_type.clone(),
+        constructor_generics: constructor_generics(&state.generics, &ty.generics),
         state,
         shared_storage_parameter: parameter(SHARED_STORAGE, takes(&InputKind::Receiver)),
         event_parameter: parameter(EVENT, takes(&InputKind::Event)),
