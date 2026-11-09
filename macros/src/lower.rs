@@ -285,7 +285,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         }),
         machine: MachineIr {
             shared_storage: model.shared_storage.clone(),
-            generics: model.item.generics.clone(),
+            generics: model.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
             exit_type: model.exit_type.clone(),
@@ -296,7 +296,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
         },
         dispatch: DispatchIr {
             shared_storage: model.shared_storage.clone(),
-            generics: model.item.generics.clone(),
+            generics: model.generics.clone(),
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
             exit_type: model.exit_type.clone(),
@@ -399,7 +399,7 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
             .map(lower_superstate_variant)
             .collect(),
         shared_storage: model.shared_storage.clone(),
-        generics: model.item.generics.clone(),
+        generics: model.generics.clone(),
         event_type: model.event_type.clone(),
         context_type: model.context_type.clone(),
         exit_type: model.exit_type.clone(),
