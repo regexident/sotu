@@ -138,6 +138,40 @@ pub(crate) struct MachineArgs {
     pub(crate) after_transition: Option<Path>,
     /// The visibility of the generated types and constructors.
     pub(crate) visibility: Option<Visibility>,
+    /// The options of the state enum.
+    pub(crate) state: StateTypeArgs,
+    /// The options of the superstate enum.
+    pub(crate) superstate: SuperstateTypeArgs,
+}
+
+/// The arguments of `state(...)` in `#[state_machine]`.
+#[derive(Default)]
+pub(crate) struct StateTypeArgs {
+    /// The name of the state enum, replacing `State`.
+    pub(crate) name: Option<Ident>,
+    /// Whether the user defines the state enum instead of the macro.
+    pub(crate) custom: bool,
+    /// The traits to derive on the generated state enum.
+    pub(crate) derives: Vec<Path>,
+}
+
+/// The arguments of `superstate(...)` in `#[state_machine]`.
+#[derive(Default)]
+pub(crate) struct SuperstateTypeArgs {
+    /// The name of the superstate enum, replacing `Superstate`.
+    pub(crate) name: Option<Ident>,
+    /// The traits to derive on the generated superstate enum.
+    pub(crate) derives: Vec<Path>,
+}
+
+impl StateTypeArgs {
+    /// The keys of `state(...)`.
+    const KEYS: &[&str] = &["name", "custom", "derive"];
+}
+
+impl SuperstateTypeArgs {
+    /// The keys of `superstate(...)`.
+    const KEYS: &[&str] = &["name", "derive"];
 }
 
 impl MachineArgs {
@@ -153,6 +187,8 @@ impl MachineArgs {
         "before_transition",
         "after_transition",
         "visibility",
+        "state",
+        "superstate",
     ];
 
     /// The keys of `#[state_machine]` whose value is a type.
@@ -207,12 +243,33 @@ impl MachineArgs {
         Ok(())
     }
 
+    /// Store the options of the `state(...)` or `superstate(...)` argument `key`.
+    ///
+    /// The superstate keys exclude `custom`, so its `custom` is always `false`.
+    fn set_type_options(&mut self, key: &Ident, options: StateTypeArgs) {
+        if key == "state" {
+            self.state = options;
+        } else {
+            self.superstate = SuperstateTypeArgs {
+                name: options.name,
+                derives: options.derives,
+            };
+        }
+    }
+
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
         if key == "initial" {
             self.initial = Some(value.clone());
 
             return Ok(());
+        }
+
+        if key == "state" || key == "superstate" {
+            return Err(syn::Error::new_spanned(
+                key,
+                format!("`{key}` takes a list, as in `{key}(name = Name)`"),
+            ));
         }
 
         if let Some(slot) = self.hook_slot(key) {
@@ -246,9 +303,12 @@ impl Parse for MachineArgs {
             before_transition: None,
             after_transition: None,
             visibility: None,
+            state: StateTypeArgs::default(),
+            superstate: SuperstateTypeArgs::default(),
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
+        let mut lists: Vec<Ident> = Vec::new();
         let mut errors = None;
 
         // A syntax error leaves the stream in an unknown position, so it ends the
@@ -262,6 +322,26 @@ impl Parse for MachineArgs {
                         if let Err(error) = arguments.set_visibility(&key, visibility) {
                             push_error(&mut errors, error);
                         }
+                    }
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            if is_list_argument(input, "state") || is_list_argument(input, "superstate") {
+                match parse_type_options_argument(input, &mut errors) {
+                    Ok((key, _)) if lists.contains(&key) => push_error(
+                        &mut errors,
+                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                    ),
+                    Ok((key, options)) => {
+                        arguments.set_type_options(&key, options);
+                        lists.push(key);
                     }
                     Err(error) => {
                         push_error(&mut errors, error);
@@ -338,6 +418,108 @@ fn parse_visibility_argument(input: ParseStream<'_>) -> syn::Result<(Ident, Visi
     }
 
     Ok((key, visibility))
+}
+
+/// Parse a `state(...)` or `superstate(...)` argument and the comma that follows it.
+///
+/// The errors inside the parentheses go to `errors`, because they leave the
+/// stream after the parentheses intact. Only a syntax error outside them is
+/// returned.
+fn parse_type_options_argument(
+    input: ParseStream<'_>,
+    errors: &mut Option<syn::Error>,
+) -> syn::Result<(Ident, StateTypeArgs)> {
+    let key: Ident = input.parse()?;
+    let content;
+
+    parenthesized!(content in input);
+
+    let keys = if key == "state" {
+        StateTypeArgs::KEYS
+    } else {
+        SuperstateTypeArgs::KEYS
+    };
+
+    let mut options = StateTypeArgs::default();
+    let mut seen: Vec<Ident> = Vec::new();
+
+    // A syntax error leaves the stream in an unknown position, so it ends the
+    // loop while keeping the errors found so far.
+    while !content.is_empty() {
+        if let Err(error) = parse_type_option(&content, keys, &mut options, &mut seen, errors) {
+            push_error(errors, error);
+
+            break;
+        }
+    }
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok((key, options))
+}
+
+/// Parse one option of a `state(...)` or `superstate(...)` argument into `options`.
+///
+/// An unknown or duplicate key goes to `errors`, and the tokens of an unknown
+/// key are skipped up to the next comma. Only a syntax error is returned.
+fn parse_type_option(
+    input: ParseStream<'_>,
+    keys: &[&str],
+    options: &mut StateTypeArgs,
+    seen: &mut Vec<Ident>,
+    errors: &mut Option<syn::Error>,
+) -> syn::Result<()> {
+    let key: Ident = input.parse()?;
+
+    if !keys.iter().any(|name| key == name) {
+        push_error(
+            errors,
+            syn::Error::new_spanned(&key, unknown_argument(&key, keys)),
+        );
+
+        while !input.is_empty() && !input.peek(Token![,]) {
+            input.parse::<proc_macro2::TokenTree>()?;
+        }
+    } else {
+        if seen.contains(&key) {
+            push_error(
+                errors,
+                syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+            );
+        }
+
+        if key == "name" {
+            input.parse::<Token![=]>()?;
+            options.name = Some(input.parse()?);
+        } else if key == "custom" {
+            options.custom = true;
+        } else {
+            let content;
+
+            parenthesized!(content in input);
+
+            let derives = content.parse_terminated(Path::parse_mod_style, Token![,])?;
+
+            options.derives.extend(derives);
+        }
+
+        seen.push(key);
+    }
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok(())
+}
+
+/// Return whether the next argument in `input` is written `key(...)`.
+fn is_list_argument(input: ParseStream<'_>, key: &str) -> bool {
+    let fork = input.fork();
+
+    fork.parse::<Ident>().is_ok_and(|ident| ident == key) && fork.peek(token::Paren)
 }
 
 /// Parse one `key = Type` argument and the comma that separates it from the next.
@@ -749,12 +931,39 @@ mod tests {
 
     #[test]
     fn machine_arguments_read_type_options() {
-        let arguments: MachineArgs =
-            syn::parse_str("initial = MyState::a(), visibility = pub(crate)").unwrap();
+        let arguments: MachineArgs = syn::parse_str(
+            "initial = MyState::a(), visibility = pub(crate), \
+             state(name = MyState, derive(Debug, PartialEq)), \
+             superstate(name = MySuperstate, derive(Debug))",
+        )
+        .unwrap();
 
         let visibility = arguments.visibility.unwrap();
+        let paths = |derives: &[Path]| -> Vec<String> {
+            derives
+                .iter()
+                .map(|path| quote!(#path).to_string())
+                .collect()
+        };
 
         assert_eq!(quote!(#visibility).to_string(), "pub (crate)");
+        assert!(arguments.state.name.is_some_and(|name| name == "MyState"));
+        assert!(!arguments.state.custom);
+        assert_eq!(paths(&arguments.state.derives), ["Debug", "PartialEq"]);
+        assert!(
+            arguments
+                .superstate
+                .name
+                .is_some_and(|name| name == "MySuperstate")
+        );
+        assert_eq!(paths(&arguments.superstate.derives), ["Debug"]);
+
+        let custom: MachineArgs =
+            syn::parse_str("initial = Mine::Off {}, state(custom, name = Mine)").unwrap();
+
+        assert!(custom.state.custom);
+        assert!(custom.state.name.is_some_and(|name| name == "Mine"));
+        assert!(custom.state.derives.is_empty());
     }
 
     #[test]
