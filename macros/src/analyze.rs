@@ -232,6 +232,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         mut errors,
     ) = collect_nodes(&mut item, &names);
 
+    check_duplicate_variants(&states, &superstates, &mut errors);
     check_action_references(&states, &superstates, &actions, &mut errors);
     check_superstate_references(&states, &superstates, &mut errors);
 
@@ -440,6 +441,33 @@ fn check_superstate_references(
                 errors,
                 syn::Error::new_spanned(name, "superstate not found"),
             );
+        }
+    }
+}
+
+/// Report every variant that repeats the name of an earlier variant of the same enum.
+///
+/// States and superstates become variants of separate enums, so a state and a
+/// superstate may share a variant name.
+fn check_duplicate_variants(
+    states: &[StateModel],
+    superstates: &[SuperstateModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let state_variants: Vec<&Ident> = states.iter().map(|state| &state.variant).collect();
+    let superstate_variants: Vec<&Ident> = superstates
+        .iter()
+        .map(|superstate| &superstate.variant)
+        .collect();
+
+    for variants in [state_variants, superstate_variants] {
+        for (index, variant) in variants.iter().enumerate() {
+            if variants[..index].contains(variant) {
+                push_error(
+                    errors,
+                    syn::Error::new_spanned(variant, format!("duplicate variant `{variant}`")),
+                );
+            }
         }
     }
 }
@@ -801,6 +829,28 @@ mod tests {
         }
     }
 
+    fn names() -> InputNames {
+        InputNames {
+            event: ident("event"),
+            context: ident("context"),
+        }
+    }
+
+    fn nodes(mut item: ItemImpl) -> Nodes {
+        match collect_nodes(&mut item, &names()) {
+            (nodes, None) => nodes,
+            (_, Some(error)) => panic!("classification failed: {error}"),
+        }
+    }
+
+    fn messages(errors: Option<syn::Error>) -> Vec<String> {
+        errors
+            .into_iter()
+            .flat_map(syn::Error::into_iter)
+            .map(|error| error.to_string())
+            .collect()
+    }
+
     #[test]
     fn pascal_case_joins_words() {
         assert_eq!(pascal_case(&ident("door_open")), ident("DoorOpen"));
@@ -1160,6 +1210,29 @@ mod tests {
             message.starts_with("entry action not found"),
             "unexpected message: {message}"
         );
+    }
+
+    #[test]
+    fn duplicate_variant_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl Lamp {
+                #[state]
+                fn idle() -> Outcome<State> {
+                    Handled
+                }
+
+                #[state(name = Idle)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_duplicate_variants(&nodes.states, &nodes.superstates, &mut errors);
+
+        assert_eq!(messages(errors), ["duplicate variant `Idle`"]);
     }
 
     #[test]
