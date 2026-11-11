@@ -1,0 +1,6 @@
+error: `#[default]` is only supported on state inputs
+  --> /tests/expand-tests/state/fail/default_on_event.rs:12:11
+   |
+12 |     fn on(#[default] event: &Event) -> Outcome<State> {
+   |           ^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
