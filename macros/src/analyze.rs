@@ -193,6 +193,18 @@ struct InputNames {
     context: Ident,
 }
 
+/// The handlers and actions of an impl block, in declaration order.
+struct Nodes {
+    /// The state handlers.
+    states: Vec<StateModel>,
+    /// The superstate handlers.
+    superstates: Vec<SuperstateModel>,
+    /// The entry and exit actions.
+    actions: Vec<ActionModel>,
+    /// The type behind the first event input.
+    event_type: Option<Type>,
+}
+
 // MARK: Analysis
 
 /// Validate `item` and classify its handlers into a [`Model`].
@@ -201,12 +213,6 @@ struct InputNames {
 /// result. The inputs of a handler are not checked when its `#[state(...)]`
 /// attribute is invalid, because the item is then not classified as a state.
 pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result<Model> {
-    let mut errors = None;
-    let mut states = Vec::new();
-    let mut superstates = Vec::new();
-    let mut actions = Vec::new();
-    let mut event_type = None;
-
     let names = InputNames {
         event: arguments
             .event_identifier
@@ -216,53 +222,15 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             .unwrap_or_else(|| Ident::new("context", Span::call_site())),
     };
 
-    for impl_item in &mut item.items {
-        let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
-            continue;
-        };
-
-        match (attribute, &mut *impl_item) {
-            (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
-                states.push(analyze_state(
-                    function,
-                    state_arguments,
-                    &names,
-                    &mut event_type,
-                    &mut errors,
-                ));
-            }
-            (ItemAttribute::Superstate(superstate_arguments), ImplItem::Fn(function)) => {
-                superstates.push(analyze_superstate(
-                    function,
-                    superstate_arguments,
-                    &names,
-                    &mut event_type,
-                    &mut errors,
-                ));
-            }
-            (ItemAttribute::Action, ImplItem::Fn(function)) => {
-                actions.push(analyze_action(function, &names, &mut errors));
-            }
-            (ItemAttribute::State(_), _) => push_error(
-                &mut errors,
-                syn::Error::new_spanned(&*impl_item, "`#[state]` can only be applied to functions"),
-            ),
-            (ItemAttribute::Superstate(_), _) => push_error(
-                &mut errors,
-                syn::Error::new_spanned(
-                    &*impl_item,
-                    "`#[superstate]` can only be applied to functions",
-                ),
-            ),
-            (ItemAttribute::Action, _) => push_error(
-                &mut errors,
-                syn::Error::new_spanned(
-                    &*impl_item,
-                    "`#[action]` can only be applied to functions",
-                ),
-            ),
-        }
-    }
+    let (
+        Nodes {
+            states,
+            superstates,
+            actions,
+            event_type,
+        },
+        mut errors,
+    ) = collect_nodes(&mut item, &names);
 
     check_action_references(&states, &superstates, &actions, &mut errors);
     check_superstate_references(&states, &superstates, &mut errors);
@@ -323,6 +291,75 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             derives: arguments.superstate.derives,
         },
     })
+}
+
+/// Classify the handlers and actions of `item`, removing the attributes of `sotu`.
+///
+/// Returns the classified items together with the errors found while
+/// classifying them.
+fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn::Error>) {
+    let mut errors = None;
+    let mut states = Vec::new();
+    let mut superstates = Vec::new();
+    let mut actions = Vec::new();
+    let mut event_type = None;
+
+    for impl_item in &mut item.items {
+        let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
+            continue;
+        };
+
+        match (attribute, &mut *impl_item) {
+            (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
+                states.push(analyze_state(
+                    function,
+                    state_arguments,
+                    names,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
+            (ItemAttribute::Superstate(superstate_arguments), ImplItem::Fn(function)) => {
+                superstates.push(analyze_superstate(
+                    function,
+                    superstate_arguments,
+                    names,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
+            (ItemAttribute::Action, ImplItem::Fn(function)) => {
+                actions.push(analyze_action(function, names, &mut errors));
+            }
+            (ItemAttribute::State(_), _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(&*impl_item, "`#[state]` can only be applied to functions"),
+            ),
+            (ItemAttribute::Superstate(_), _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[superstate]` can only be applied to functions",
+                ),
+            ),
+            (ItemAttribute::Action, _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[action]` can only be applied to functions",
+                ),
+            ),
+        }
+    }
+
+    let nodes = Nodes {
+        states,
+        superstates,
+        actions,
+        event_type,
+    };
+
+    (nodes, errors)
 }
 
 /// Remove the attributes of `sotu` from `item`, returning the one it carried.
