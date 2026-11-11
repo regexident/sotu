@@ -1,0 +1,6 @@
+error: state handlers can not define their generics themselves
+ --> /tests/expand-tests/state/fail/handler_generics.rs:8:10
+  |
+8 |     fn on<T>() -> Outcome<State> {
+  |          ^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
