@@ -1,0 +1,6 @@
+error: unknown argument `bogus`; expected one of: `initial`, `context`, `event_identifier`, `context_identifier`, `exit`, `before_dispatch`, `after_dispatch`, `before_transition`, `after_transition`, `visibility`, `state`, `superstate`
+ --> /tests/expand-tests/state_machine/fail/unknown_argument.rs:5:39
+  |
+5 | #[state_machine(initial = State::a(), bogus = 1)]
+  |                                       ^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

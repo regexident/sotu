@@ -1,0 +1,6 @@
+error: expected tokens, found string literal; write `State::a()` without quotes
+ --> /tests/expand-tests/state_machine/fail/string_literal_argument.rs:5:27
+  |
+5 | #[state_machine(initial = "State::a()")]
+  |                           ^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

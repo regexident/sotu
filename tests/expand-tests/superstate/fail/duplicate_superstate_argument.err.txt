@@ -1,0 +1,6 @@
+error: duplicate `initial` item
+  --> /tests/expand-tests/superstate/fail/duplicate_superstate_argument.rs:12:40
+   |
+12 |     #[superstate(initial = State::a(), initial = State::a())]
+   |                                        ^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

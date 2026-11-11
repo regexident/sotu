@@ -1,0 +1,8 @@
+error: no initial state defined; add `initial = State::name()` to `#[state_machine]`
+ --> /tests/expand-tests/state_machine/fail/missing_initial.rs:5:1
+  |
+5 | #[state_machine]
+  | ^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
