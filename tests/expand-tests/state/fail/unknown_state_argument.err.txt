@@ -1,0 +1,6 @@
+error: unknown argument `bogus`; expected one of: `name`, `superstate`, `entry_action`, `exit_action`, `local_storage`
+ --> /tests/expand-tests/state/fail/unknown_state_argument.rs:7:13
+  |
+7 |     #[state(bogus)]
+  |             ^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

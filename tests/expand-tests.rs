@@ -17,6 +17,13 @@ mod state_machine {
     pub fn pass() {
         tryexpand::expand(["tests/expand-tests/state_machine/pass/**/*.rs"]).and_check();
     }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/state_machine/fail/**/*.rs"])
+            .and_check()
+            .expect_fail();
+    }
 }
 
 mod state {
@@ -24,12 +31,26 @@ mod state {
     pub fn pass() {
         tryexpand::expand(["tests/expand-tests/state/pass/**/*.rs"]).and_check();
     }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/state/fail/**/*.rs"])
+            .and_check()
+            .expect_fail();
+    }
 }
 
 mod superstate {
     #[test]
     pub fn pass() {
         tryexpand::expand(["tests/expand-tests/superstate/pass/**/*.rs"]).and_check();
+    }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/superstate/fail/**/*.rs"])
+            .and_check()
+            .expect_fail();
     }
 }
 

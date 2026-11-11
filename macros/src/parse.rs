@@ -28,7 +28,7 @@ fn parse_key_values(input: ParseStream<'_>, expected: &[&str]) -> syn::Result<Ve
     // A syntax error leaves the stream in an unknown position, so it ends the
     // loop while keeping the errors found so far.
     while !input.is_empty() {
-        let (key, value) = match parse_key_value(input) {
+        let (key, value) = match parse_key_value(input, expected) {
             Ok(entry) => entry,
             Err(error) => {
                 push_error(&mut errors, error);
@@ -50,8 +50,19 @@ fn parse_key_values(input: ParseStream<'_>, expected: &[&str]) -> syn::Result<Ve
 }
 
 /// Parse one `key = value` argument and the comma that separates it from the next.
-fn parse_key_value(input: ParseStream<'_>) -> syn::Result<(Ident, Expr)> {
+///
+/// A key outside `expected` that is not followed by `=` is reported as an
+/// unknown argument at the key, since naming the missing `=` would point the
+/// user at the wrong mistake.
+fn parse_key_value(input: ParseStream<'_>, expected: &[&str]) -> syn::Result<(Ident, Expr)> {
     let key: Ident = input.parse()?;
+
+    if !input.peek(Token![=]) && !expected.iter().any(|name| key == name) {
+        return Err(syn::Error::new_spanned(
+            &key,
+            unknown_argument(&key, expected),
+        ));
+    }
 
     input.parse::<Token![=]>()?;
 
@@ -373,7 +384,7 @@ impl Parse for MachineArgs {
                 continue;
             }
 
-            let (key, value) = match parse_key_value(input) {
+            let (key, value) = match parse_key_value(input, Self::KEYS) {
                 Ok(entry) => entry,
                 Err(error) => {
                     push_error(&mut errors, error);
@@ -705,7 +716,7 @@ fn parse_node_arguments(
             continue;
         }
 
-        let (key, value) = match parse_key_value(input) {
+        let (key, value) = match parse_key_value(input, keys) {
             Ok(entry) => entry,
             Err(error) => {
                 push_error(&mut errors, error);
