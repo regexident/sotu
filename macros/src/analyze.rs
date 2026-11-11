@@ -344,7 +344,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 check_signature(function, Role::Action, names, &mut errors);
-                actions.push(analyze_action(function, names, &mut errors));
+                actions.push(analyze_action(function, names));
             }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
@@ -495,6 +495,8 @@ fn check_signature(
 ) {
     check_generics(function, role, errors);
     check_default_attributes(function, role, names, errors);
+    check_input_patterns(function, errors);
+    check_inputs_by_reference(function, role, names, errors);
 }
 
 /// Report generic parameters declared by `function`.
@@ -561,11 +563,78 @@ fn check_default_attributes(
     }
 }
 
+/// Report every input of `function` whose pattern is not a plain identifier.
+///
+/// An input names the local storage field it refers to, which requires an
+/// identifier.
+fn check_input_patterns(function: &ImplItemFn, errors: &mut Option<syn::Error>) {
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        let kind = match &*typed.pat {
+            Pat::Ident(_) => continue,
+            Pat::Tuple(_) => "tuple",
+            Pat::TupleStruct(_) => "tuple struct",
+            Pat::Struct(_) => "struct",
+            Pat::Slice(_) => "slice",
+            Pat::Reference(_) => "reference",
+            Pat::Wild(_) => "wildcard",
+            Pat::Lit(_) => "literal",
+            Pat::Range(_) => "range",
+            Pat::Or(_) => "or",
+            Pat::Paren(_) => "parenthesized",
+            Pat::Path(_) => "path",
+            Pat::Rest(_) => "rest",
+            Pat::Macro(_) => "macro",
+            _ => "this",
+        };
+
+        push_error(
+            errors,
+            syn::Error::new_spanned(&typed.pat, format!("{kind} pattern is not supported")),
+        );
+    }
+}
+
+/// Report every local storage input of `function` that is not a reference.
+///
+/// Local storage lives in the state, and handlers and actions borrow it, so an
+/// input taking a field by value would have to move it out of the state.
+/// Inputs whose pattern is not an identifier are left to
+/// [`check_input_patterns`].
+fn check_inputs_by_reference(
+    function: &ImplItemFn,
+    role: Role,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) {
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        let is_local_storage = matches!(&*typed.pat, Pat::Ident(_))
+            && !is_named(typed, &names.context)
+            && (role == Role::Action || !is_named(typed, &names.event));
+
+        if is_local_storage && !matches!(&*typed.ty, Type::Reference(_)) {
+            push_error(
+                errors,
+                syn::Error::new_spanned(&typed.ty, "input must be passed as a reference"),
+            );
+        }
+    }
+}
+
 /// Classify the inputs of a handler.
 ///
 /// Only state handlers have `#[default]` attributes taken from their inputs, so
 /// `takes_defaults` leaves the attribute in place on a superstate handler, where
-/// [`check_default_attributes`] reports it.
+/// [`check_default_attributes`] reports it. Inputs that are not local storage
+/// are skipped, since [`check_input_patterns`] and [`check_inputs_by_reference`]
+/// report them.
 fn handler_inputs(
     function: &mut ImplItemFn,
     takes_defaults: bool,
@@ -590,23 +659,6 @@ fn handler_inputs(
             },
             FnArg::Typed(typed) => {
                 let Some((name, ty, mutable)) = local_storage_input(typed) else {
-                    let node = if takes_defaults {
-                        "state"
-                    } else {
-                        "superstate"
-                    };
-
-                    push_error(
-                        errors,
-                        syn::Error::new_spanned(
-                            &*typed,
-                            format!(
-                                "unsupported input; {node} handlers take a receiver, `event` and \
-                                 references to local storage"
-                            ),
-                        ),
-                    );
-
                     continue;
                 };
 
@@ -742,11 +794,11 @@ fn analyze_state(
     }
 }
 
-fn analyze_action(
-    function: &ImplItemFn,
-    names: &InputNames,
-    errors: &mut Option<syn::Error>,
-) -> ActionModel {
+/// Classify the inputs of the action `function`.
+///
+/// Inputs that are not local storage are skipped, since
+/// [`check_input_patterns`] and [`check_inputs_by_reference`] report them.
+fn analyze_action(function: &ImplItemFn, names: &InputNames) -> ActionModel {
     let mut inputs = Vec::new();
 
     for input in &function.sig.inputs {
@@ -755,22 +807,16 @@ fn analyze_action(
             FnArg::Typed(typed) if is_named(typed, &names.context) => {
                 inputs.push(InputKind::Context);
             }
-            FnArg::Typed(typed) => match local_storage_input(typed) {
-                Some((name, ty, mutable)) => inputs.push(InputKind::LocalStorage {
-                    name,
-                    ty,
-                    mutable,
-                    default: None,
-                }),
-                None => push_error(
-                    errors,
-                    syn::Error::new_spanned(
-                        typed,
-                        "unsupported input; actions take a receiver and references to local \
-                         storage",
-                    ),
-                ),
-            },
+            FnArg::Typed(typed) => {
+                if let Some((name, ty, mutable)) = local_storage_input(typed) {
+                    inputs.push(InputKind::LocalStorage {
+                        name,
+                        ty,
+                        mutable,
+                        default: None,
+                    });
+                }
+            }
         }
     }
 
@@ -1399,6 +1445,42 @@ mod tests {
                 "`#[default]` is only supported on state inputs",
             ]
         );
+    }
+
+    #[test]
+    fn non_identifier_pattern_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on((a, b): &(u8, u8), _: &u8, counter: &u32) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let mut errors = None;
+
+        check_input_patterns(&state, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "tuple pattern is not supported",
+                "wildcard pattern is not supported"
+            ]
+        );
+    }
+
+    #[test]
+    fn input_by_value_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on(&mut self, counter: u32, event: &Event, total: &u32) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let mut errors = None;
+
+        check_inputs_by_reference(&state, Role::State, &names(), &mut errors);
+
+        assert_eq!(messages(errors), ["input must be passed as a reference"]);
     }
 
     #[test]

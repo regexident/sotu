@@ -1,0 +1,6 @@
+error: input must be passed as a reference
+ --> /tests/expand-tests/state/fail/input_by_value.rs:8:20
+  |
+8 |     fn on(counter: u32) -> Outcome<State> {
+  |                    ^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

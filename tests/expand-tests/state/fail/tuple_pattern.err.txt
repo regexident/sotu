@@ -1,0 +1,6 @@
+error: tuple pattern is not supported
+ --> /tests/expand-tests/state/fail/tuple_pattern.rs:8:11
+  |
+8 |     fn on((low, high): &(u8, u8)) -> Outcome<State> {
+  |           ^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
