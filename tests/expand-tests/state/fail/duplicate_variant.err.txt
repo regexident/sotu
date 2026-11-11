@@ -1,0 +1,6 @@
+error: duplicate variant `Idle`
+  --> /tests/expand-tests/state/fail/duplicate_variant.rs:12:20
+   |
+12 |     #[state(name = Idle)]
+   |                    ^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
