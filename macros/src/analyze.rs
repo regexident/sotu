@@ -205,6 +205,17 @@ struct Nodes {
     event_type: Option<Type>,
 }
 
+/// The kind of function whose signature a check examines.
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+enum Role {
+    /// A `#[state]` handler.
+    State,
+    /// A `#[superstate]` handler.
+    Superstate,
+    /// An `#[action]`.
+    Action,
+}
+
 // MARK: Analysis
 
 /// Validate `item` and classify its handlers into a [`Model`].
@@ -312,6 +323,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
 
         match (attribute, &mut *impl_item) {
             (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
+                check_signature(function, Role::State, names, &mut errors);
                 states.push(analyze_state(
                     function,
                     state_arguments,
@@ -321,6 +333,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Superstate(superstate_arguments), ImplItem::Fn(function)) => {
+                check_signature(function, Role::Superstate, names, &mut errors);
                 superstates.push(analyze_superstate(
                     function,
                     superstate_arguments,
@@ -330,6 +343,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
+                check_signature(function, Role::Action, names, &mut errors);
                 actions.push(analyze_action(function, names, &mut errors));
             }
             (ItemAttribute::State(_), _) => push_error(
@@ -472,11 +486,58 @@ fn check_duplicate_variants(
     }
 }
 
+/// Report the signature errors of the handler or action `function`.
+fn check_signature(
+    function: &ImplItemFn,
+    role: Role,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) {
+    check_default_attributes(function, role, names, errors);
+}
+
+/// Report every `#[default]` attribute of `function` that is not on a state input.
+///
+/// Only the local storage inputs of a state handler declare fields that a
+/// constructor initializes, so a default anywhere else has no effect.
+fn check_default_attributes(
+    function: &ImplItemFn,
+    role: Role,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) {
+    for input in &function.sig.inputs {
+        let attributes = match input {
+            FnArg::Receiver(receiver) => &receiver.attrs,
+            FnArg::Typed(typed)
+                if role != Role::State
+                    || is_named(typed, &names.event)
+                    || is_named(typed, &names.context) =>
+            {
+                &typed.attrs
+            }
+            FnArg::Typed(_) => continue,
+        };
+
+        for attribute in attributes {
+            if attribute.path().is_ident("default") {
+                push_error(
+                    errors,
+                    syn::Error::new_spanned(
+                        attribute,
+                        "`#[default]` is only supported on state inputs",
+                    ),
+                );
+            }
+        }
+    }
+}
+
 /// Classify the inputs of a handler.
 ///
 /// Only state handlers have `#[default]` attributes taken from their inputs, so
 /// `takes_defaults` leaves the attribute in place on a superstate handler, where
-/// the compiler rejects it.
+/// [`check_default_attributes`] reports it.
 fn handler_inputs(
     function: &mut ImplItemFn,
     takes_defaults: bool,
@@ -1233,6 +1294,34 @@ mod tests {
         check_duplicate_variants(&nodes.states, &nodes.superstates, &mut errors);
 
         assert_eq!(messages(errors), ["duplicate variant `Idle`"]);
+    }
+
+    #[test]
+    fn default_on_non_state_input_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on(#[default] event: &Event, #[default] counter: &mut u32) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let superstate: ImplItemFn = parse_quote! {
+            fn group(#[default] counter: &u32) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut errors = None;
+
+        check_default_attributes(&state, Role::State, &names(), &mut errors);
+        check_default_attributes(&superstate, Role::Superstate, &names(), &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "`#[default]` is only supported on state inputs",
+                "`#[default]` is only supported on state inputs",
+            ]
+        );
     }
 
     #[test]
