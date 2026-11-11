@@ -493,7 +493,35 @@ fn check_signature(
     names: &InputNames,
     errors: &mut Option<syn::Error>,
 ) {
+    check_generics(function, role, errors);
     check_default_attributes(function, role, names, errors);
+}
+
+/// Report generic parameters declared by `function`.
+///
+/// The generated code calls handlers and actions without naming generic
+/// arguments, so only the generics of the impl block are available to them. A
+/// `where` clause declares no parameters and is accepted.
+fn check_generics(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Error>) {
+    let generics = &function.sig.generics;
+
+    if generics.params.is_empty() {
+        return;
+    }
+
+    let kind = match role {
+        Role::State => "state handlers",
+        Role::Superstate => "superstate handlers",
+        Role::Action => "actions",
+    };
+
+    push_error(
+        errors,
+        syn::Error::new_spanned(
+            generics,
+            format!("{kind} can not define their generics themselves"),
+        ),
+    );
 }
 
 /// Report every `#[default]` attribute of `function` that is not on a state input.
@@ -1294,6 +1322,55 @@ mod tests {
         check_duplicate_variants(&nodes.states, &nodes.superstates, &mut errors);
 
         assert_eq!(messages(errors), ["duplicate variant `Idle`"]);
+    }
+
+    #[test]
+    fn handler_generics_are_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on<T>(event: &Event) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let superstate: ImplItemFn = parse_quote! {
+            fn group<'a>() -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut errors = None;
+
+        check_generics(&state, Role::State, &mut errors);
+        check_generics(&superstate, Role::Superstate, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "state handlers can not define their generics themselves",
+                "superstate handlers can not define their generics themselves",
+            ]
+        );
+    }
+
+    #[test]
+    fn action_generics_are_reported() {
+        let action: ImplItemFn = parse_quote! {
+            fn prepare<const N: usize>(counter: &mut u32) {}
+        };
+
+        let plain: ImplItemFn = parse_quote! {
+            fn reset(counter: &mut u32) where Self: Sized {}
+        };
+
+        let mut errors = None;
+
+        check_generics(&action, Role::Action, &mut errors);
+        check_generics(&plain, Role::Action, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            ["actions can not define their generics themselves"]
+        );
     }
 
     #[test]

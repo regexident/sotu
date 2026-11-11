@@ -59,4 +59,11 @@ mod action {
     pub fn pass() {
         tryexpand::expand(["tests/expand-tests/action/pass/**/*.rs"]).and_check();
     }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/action/fail/**/*.rs"])
+            .and_check()
+            .expect_fail();
+    }
 }

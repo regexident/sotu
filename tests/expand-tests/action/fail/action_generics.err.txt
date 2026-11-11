@@ -1,0 +1,6 @@
+error: actions can not define their generics themselves
+  --> /tests/expand-tests/action/fail/action_generics.rs:13:15
+   |
+13 |     fn prepare<T>() {}
+   |               ^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
