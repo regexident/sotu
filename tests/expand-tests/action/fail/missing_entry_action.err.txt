@@ -1,0 +1,6 @@
+error: entry action not found
+ --> /tests/expand-tests/action/fail/missing_entry_action.rs:7:28
+  |
+7 |     #[state(entry_action = prepare)]
+  |                            ^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
