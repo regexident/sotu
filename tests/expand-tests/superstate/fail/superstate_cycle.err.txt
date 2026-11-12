@@ -1,0 +1,6 @@
+error: superstate cycle detected: first -> second -> first
+  --> /tests/expand-tests/superstate/fail/superstate_cycle.rs:12:31
+   |
+12 |     #[superstate(superstate = second)]
+   |                               ^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

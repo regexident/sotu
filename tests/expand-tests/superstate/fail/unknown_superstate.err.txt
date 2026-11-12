@@ -1,0 +1,6 @@
+error: superstate not found
+  --> /tests/expand-tests/superstate/fail/unknown_superstate.rs:12:31
+   |
+12 |     #[superstate(superstate = missing)]
+   |                               ^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
