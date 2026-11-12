@@ -1,6 +1,7 @@
 //! Validate and classify a `#[state_machine]` impl block.
 
 use proc_macro2::Span;
+use quote::ToTokens;
 use syn::ext::IdentExt;
 use syn::{
     Attribute, Expr, FnArg, Generics, Ident, ImplItem, ImplItemFn, ItemImpl, Meta, Pat, PatType,
@@ -664,7 +665,7 @@ fn handler_inputs(
             FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
                 Ok(referent) => {
                     inputs.push(InputKind::Event);
-                    event_type.get_or_insert_with(|| referent.clone());
+                    check_event_type(event_type, referent, errors);
                 }
                 Err(error) => push_error(errors, error),
             },
@@ -1067,6 +1068,34 @@ fn check_custom_with_derives(options: &StateTypeArgs, errors: &mut Option<syn::E
             errors,
             syn::Error::new_spanned(custom, "can not use `custom` with derives"),
         );
+    }
+}
+
+/// Record `referent` as the event type, reporting it if it differs from the
+/// event type already recorded in `event_type`.
+///
+/// Types are compared by their tokens with whitespace removed, so two spellings
+/// of the same type through different paths count as different types.
+fn check_event_type(
+    event_type: &mut Option<Type>,
+    referent: &Type,
+    errors: &mut Option<syn::Error>,
+) {
+    let tokens = |ty: &Type| -> String {
+        ty.to_token_stream()
+            .to_string()
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect()
+    };
+
+    match event_type {
+        None => *event_type = Some(referent.clone()),
+        Some(first) if tokens(first) != tokens(referent) => push_error(
+            errors,
+            syn::Error::new_spanned(referent, "conflicting event types"),
+        ),
+        Some(_) => {}
     }
 }
 
@@ -1844,6 +1873,23 @@ mod tests {
         check_custom_with_derives(&alone.state, &mut errors);
 
         assert_eq!(messages(errors), ["can not use `custom` with derives"]);
+    }
+
+    #[test]
+    fn conflicting_event_types_are_reported() {
+        let mut event_type = None;
+        let mut errors = None;
+
+        check_event_type(&mut event_type, &parse_quote!(Event), &mut errors);
+        check_event_type(&mut event_type, &parse_quote!(Event), &mut errors);
+        check_event_type(&mut event_type, &parse_quote!(Other), &mut errors);
+
+        let Some(recorded) = event_type else {
+            panic!("the first event type should be recorded");
+        };
+
+        assert_eq!(quote!(#recorded).to_string(), "Event");
+        assert_eq!(messages(errors), ["conflicting event types"]);
     }
 
     #[test]

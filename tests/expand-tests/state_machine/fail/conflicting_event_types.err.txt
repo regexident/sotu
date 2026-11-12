@@ -1,0 +1,6 @@
+error: conflicting event types
+  --> /tests/expand-tests/state_machine/fail/conflicting_event_types.rs:21:20
+   |
+21 |     fn off(event: &Other) -> Outcome<State> {
+   |                    ^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
