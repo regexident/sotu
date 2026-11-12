@@ -1,0 +1,6 @@
+error: state `on` lacks field `counter` required by superstate `group`
+ --> /tests/expand-tests/state/fail/missing_superstate_field.rs:8:8
+  |
+8 |     fn on() -> Outcome<State> {
+  |        ^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

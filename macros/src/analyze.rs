@@ -905,7 +905,8 @@ fn event_referent(typed: &PatType) -> syn::Result<&Type> {
     }
 }
 
-/// Report every link that does not resolve and every superstate cycle.
+/// Report every link that does not resolve, superstate cycles, and states
+/// lacking a field that a superstate above them borrows.
 fn check_links(
     states: &[StateModel],
     superstates: &[SuperstateModel],
@@ -915,6 +916,7 @@ fn check_links(
     check_action_references(states, superstates, actions, errors);
     check_superstate_references(states, superstates, errors);
     check_superstate_cycles(superstates, errors);
+    check_superstate_fields(states, superstates, errors);
 }
 
 /// Return the index of the superstate that `superstate` links to, if it exists.
@@ -967,6 +969,52 @@ fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<
 
             chain.push(next);
             current = &superstates[next];
+        }
+    }
+}
+
+/// Report every field that a superstate borrows and a state below it lacks.
+///
+/// A superstate borrows its fields from whichever state is active below it, so
+/// every state below a superstate, directly or through nested superstates,
+/// must declare them. The walk up from a state is bounded by the number of
+/// superstates, so a cycle of links does not prevent it from ending.
+fn check_superstate_fields(
+    states: &[StateModel],
+    superstates: &[SuperstateModel],
+    errors: &mut Option<syn::Error>,
+) {
+    for state in states {
+        let mut link = state.superstate.as_ref();
+        let mut steps = 0;
+
+        while let Some(name) = link
+            && steps < superstates.len()
+        {
+            let Some(superstate) = superstates
+                .iter()
+                .find(|superstate| superstate.handler == *name)
+            else {
+                break;
+            };
+
+            for field in &superstate.fields {
+                if !state.fields.iter().any(|own| own.name == field.name) {
+                    push_error(
+                        errors,
+                        syn::Error::new_spanned(
+                            &state.handler,
+                            format!(
+                                "state `{}` lacks field `{}` required by superstate `{}`",
+                                state.handler, field.name, superstate.handler
+                            ),
+                        ),
+                    );
+                }
+            }
+
+            link = superstate.superstate.as_ref();
+            steps += 1;
         }
     }
 }
@@ -1641,6 +1689,42 @@ mod tests {
         check_superstate_cycles(&nodes.superstates, &mut errors);
 
         assert_eq!(messages(errors), ["superstate cycle detected: a -> b -> a"]);
+    }
+
+    #[test]
+    fn missing_superstate_field_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl Counter {
+                #[state(superstate = group)]
+                fn a(counter: &mut u32) -> Outcome<State> {
+                    Super
+                }
+
+                #[state(superstate = inner)]
+                fn b() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = group)]
+                fn inner() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn group(counter: &u32) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_superstate_fields(&nodes.states, &nodes.superstates, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            ["state `b` lacks field `counter` required by superstate `group`"]
+        );
     }
 
     #[test]
