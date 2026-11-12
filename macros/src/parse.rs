@@ -160,8 +160,9 @@ pub(crate) struct MachineArgs {
 pub(crate) struct StateTypeArgs {
     /// The name of the state enum, replacing `State`.
     pub(crate) name: Option<Ident>,
-    /// Whether the user defines the state enum instead of the macro.
-    pub(crate) custom: bool,
+    /// The `custom` key, present when the user defines the state enum instead
+    /// of the macro.
+    pub(crate) custom: Option<Ident>,
     /// The traits to derive on the generated state enum.
     pub(crate) derives: Vec<Path>,
 }
@@ -256,7 +257,7 @@ impl MachineArgs {
 
     /// Store the options of the `state(...)` or `superstate(...)` argument `key`.
     ///
-    /// The superstate keys exclude `custom`, so its `custom` is always `false`.
+    /// The superstate keys exclude `custom`, so its `custom` is always `None`.
     fn set_type_options(&mut self, key: &Ident, options: StateTypeArgs) {
         if key == "state" {
             self.state = options;
@@ -505,7 +506,7 @@ fn parse_type_option(
             input.parse::<Token![=]>()?;
             options.name = Some(input.parse()?);
         } else if key == "custom" {
-            options.custom = true;
+            options.custom = Some(key.clone());
         } else {
             let content;
 
@@ -959,7 +960,7 @@ mod tests {
 
         assert_eq!(quote!(#visibility).to_string(), "pub (crate)");
         assert!(arguments.state.name.is_some_and(|name| name == "MyState"));
-        assert!(!arguments.state.custom);
+        assert!(arguments.state.custom.is_none());
         assert_eq!(paths(&arguments.state.derives), ["Debug", "PartialEq"]);
         assert!(
             arguments
@@ -972,7 +973,7 @@ mod tests {
         let custom: MachineArgs =
             syn::parse_str("initial = Mine::Off {}, state(custom, name = Mine)").unwrap();
 
-        assert!(custom.state.custom);
+        assert!(custom.state.custom.is_some_and(|key| key == "custom"));
         assert!(custom.state.name.is_some_and(|name| name == "Mine"));
         assert!(custom.state.derives.is_empty());
     }
