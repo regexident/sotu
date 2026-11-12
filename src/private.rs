@@ -121,6 +121,18 @@ pub trait Submachine: Sized {
 )]
 pub trait BlockingSubmachine: Submachine + crate::blocking::IntoStateMachine {}
 
+/// Marker for generated machines that can not be left through an exit point.
+///
+/// Implemented for machines whose [`Submachine::Exit`] is
+/// [`core::convert::Infallible`]. A parent that mounts a child without an exit
+/// handler requires this trait of the child, since an exit it can not handle
+/// would otherwise go unhandled.
+#[diagnostic::on_unimplemented(
+    message = "submachine `{Self}` can exit",
+    note = "declare `exit_handler = …` on `#[submachine]`"
+)]
+pub trait ExitlessSubmachine: Submachine<Exit = core::convert::Infallible> {}
+
 /// A [`NodeOutcome`] together with the event it was produced for.
 ///
 /// Dispatch hooks take the event by value so that mount boundaries can move it
