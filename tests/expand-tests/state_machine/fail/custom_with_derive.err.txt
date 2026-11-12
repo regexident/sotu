@@ -1,0 +1,6 @@
+error: can not use `custom` with derives
+ --> /tests/expand-tests/state_machine/fail/custom_with_derive.rs:5:46
+  |
+5 | #[state_machine(initial = State::on(), state(custom, derive(Debug)))]
+  |                                              ^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

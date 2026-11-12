@@ -8,7 +8,8 @@ use syn::{
 };
 
 use crate::parse::{
-    ItemAttribute, MachineArgs, StateArgs, SuperstateArgs, parse_item_attribute, push_error,
+    ItemAttribute, MachineArgs, StateArgs, StateTypeArgs, SuperstateArgs, parse_item_attribute,
+    push_error,
 };
 
 // MARK: Model
@@ -249,6 +250,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     check_duplicate_variants(&states, &superstates, &mut errors);
     check_links(&states, &superstates, &actions, &mut errors);
     check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
+    check_custom_with_derives(&arguments.state, &mut errors);
 
     let Some(initial) = arguments.initial else {
         let mut error = syn::Error::new(
@@ -294,7 +296,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
                 .state
                 .name
                 .unwrap_or_else(|| Ident::new("State", Span::call_site())),
-            custom: arguments.state.custom,
+            custom: arguments.state.custom.is_some(),
             derives: arguments.state.derives,
         },
         superstate_type: TypeOptions {
@@ -1049,6 +1051,21 @@ fn check_context_declared(
                 input,
                 "context type must be declared with `context = Type` on `#[state_machine]`",
             ),
+        );
+    }
+}
+
+/// Report the `custom` key of `options` if it is combined with derives.
+///
+/// The macro does not generate a custom state enum, so it has nothing to
+/// derive the traits on.
+fn check_custom_with_derives(options: &StateTypeArgs, errors: &mut Option<syn::Error>) {
+    if let Some(custom) = &options.custom
+        && !options.derives.is_empty()
+    {
+        push_error(
+            errors,
+            syn::Error::new_spanned(custom, "can not use `custom` with derives"),
         );
     }
 }
@@ -1813,6 +1830,20 @@ mod tests {
             error.to_string(),
             "context type must be declared with `context = Type` on `#[state_machine]`"
         );
+    }
+
+    #[test]
+    fn custom_with_derive_is_reported() {
+        let combined: MachineArgs =
+            syn::parse_str("initial = State::a(), state(custom, derive(Debug))").unwrap();
+        let alone: MachineArgs = syn::parse_str("initial = State::a(), state(custom)").unwrap();
+
+        let mut errors = None;
+
+        check_custom_with_derives(&combined.state, &mut errors);
+        check_custom_with_derives(&alone.state, &mut errors);
+
+        assert_eq!(messages(errors), ["can not use `custom` with derives"]);
     }
 
     #[test]
