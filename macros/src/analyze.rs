@@ -203,6 +203,8 @@ struct Nodes {
     actions: Vec<ActionModel>,
     /// The type behind the first event input.
     event_type: Option<Type>,
+    /// The context inputs of the handlers and actions.
+    context_inputs: Vec<PatType>,
 }
 
 /// The kind of function whose signature a check examines.
@@ -239,12 +241,14 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             superstates,
             actions,
             event_type,
+            context_inputs,
         },
         mut errors,
     ) = collect_nodes(&mut item, &names);
 
     check_duplicate_variants(&states, &superstates, &mut errors);
     check_links(&states, &superstates, &actions, &mut errors);
+    check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
 
     let Some(initial) = arguments.initial else {
         let mut error = syn::Error::new(
@@ -314,11 +318,16 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut superstates = Vec::new();
     let mut actions = Vec::new();
     let mut event_type = None;
+    let mut context_inputs = Vec::new();
 
     for impl_item in &mut item.items {
         let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
             continue;
         };
+
+        if let ImplItem::Fn(function) = &*impl_item {
+            context_inputs.extend(context_input(function, names).cloned());
+        }
 
         match (attribute, &mut *impl_item) {
             (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
@@ -371,6 +380,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
         superstates,
         actions,
         event_type,
+        context_inputs,
     };
 
     (nodes, errors)
@@ -1019,6 +1029,38 @@ fn check_superstate_fields(
     }
 }
 
+/// Report the first of `context_inputs` unless the context type is `declared`.
+///
+/// Without `context = Type` the context is `()`, which no context input
+/// declares. One error suffices, since every context input has the same cause.
+fn check_context_declared(
+    context_inputs: &[PatType],
+    declared: bool,
+    errors: &mut Option<syn::Error>,
+) {
+    if declared {
+        return;
+    }
+
+    if let Some(input) = context_inputs.first() {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                input,
+                "context type must be declared with `context = Type` on `#[state_machine]`",
+            ),
+        );
+    }
+}
+
+/// Return the context input of `function`, if it has one.
+fn context_input<'a>(function: &'a ImplItemFn, names: &InputNames) -> Option<&'a PatType> {
+    function.sig.inputs.iter().find_map(|input| match input {
+        FnArg::Typed(typed) if is_named(typed, &names.context) => Some(typed),
+        FnArg::Receiver(_) | FnArg::Typed(_) => None,
+    })
+}
+
 // MARK: Names
 
 /// Return the PascalCase form of a snake_case `ident`, as in `door_open` to `DoorOpen`.
@@ -1172,14 +1214,22 @@ mod tests {
 
     #[test]
     fn context_input_is_classified() {
-        let model = model(parse_quote! {
+        let arguments: MachineArgs =
+            syn::parse_str("initial = State::on(), context = Sink<'ctx, 'data>").unwrap();
+
+        let item: ItemImpl = parse_quote! {
             impl Writer {
                 #[state]
                 fn on(context: &mut Sink<'_, '_>, event: &Event) -> Outcome<State> {
                     Handled
                 }
             }
-        });
+        };
+
+        let model = match analyze(arguments, item) {
+            Ok(model) => model,
+            Err(error) => panic!("analysis failed: {error}"),
+        };
 
         assert_eq!(
             model.states[0].inputs,
@@ -1190,7 +1240,8 @@ mod tests {
     #[test]
     fn renamed_identifiers_classify_inputs() {
         let arguments: MachineArgs = syn::parse_str(
-            "initial = State::on(), event_identifier = input, context_identifier = sink",
+            "initial = State::on(), context = Sink<'ctx, 'data>, event_identifier = input, \
+             context_identifier = sink",
         )
         .unwrap();
 
@@ -1724,6 +1775,43 @@ mod tests {
         assert_eq!(
             messages(errors),
             ["state `b` lacks field `counter` required by superstate `group`"]
+        );
+    }
+
+    #[test]
+    fn undeclared_context_is_reported_once() {
+        let nodes = nodes(parse_quote! {
+            impl Writer {
+                #[state]
+                fn on(context: &mut Sink) -> Outcome<State> {
+                    Handled
+                }
+
+                #[state]
+                fn off(context: &mut Sink) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let mut declared = None;
+
+        check_context_declared(&nodes.context_inputs, true, &mut declared);
+
+        assert!(declared.is_none());
+
+        let mut undeclared = None;
+
+        check_context_declared(&nodes.context_inputs, false, &mut undeclared);
+
+        let Some(error) = undeclared else {
+            panic!("an undeclared context type should be reported");
+        };
+
+        assert_eq!(error.clone().into_iter().count(), 1);
+        assert_eq!(
+            error.to_string(),
+            "context type must be declared with `context = Type` on `#[state_machine]`"
         );
     }
 
