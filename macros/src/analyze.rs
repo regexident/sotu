@@ -244,8 +244,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     ) = collect_nodes(&mut item, &names);
 
     check_duplicate_variants(&states, &superstates, &mut errors);
-    check_action_references(&states, &superstates, &actions, &mut errors);
-    check_superstate_references(&states, &superstates, &mut errors);
+    check_links(&states, &superstates, &actions, &mut errors);
 
     let Some(initial) = arguments.initial else {
         let mut error = syn::Error::new(
@@ -906,6 +905,72 @@ fn event_referent(typed: &PatType) -> syn::Result<&Type> {
     }
 }
 
+/// Report every link that does not resolve and every superstate cycle.
+fn check_links(
+    states: &[StateModel],
+    superstates: &[SuperstateModel],
+    actions: &[ActionModel],
+    errors: &mut Option<syn::Error>,
+) {
+    check_action_references(states, superstates, actions, errors);
+    check_superstate_references(states, superstates, errors);
+    check_superstate_cycles(superstates, errors);
+}
+
+/// Return the index of the superstate that `superstate` links to, if it exists.
+fn parent_index(superstates: &[SuperstateModel], superstate: &SuperstateModel) -> Option<usize> {
+    let link = superstate.superstate.as_ref()?;
+
+    superstates
+        .iter()
+        .position(|candidate| candidate.handler == *link)
+}
+
+/// Report every cycle of `superstate` links, once per cycle.
+///
+/// Each superstate's chain of links is followed until it returns to the
+/// superstate, ends, or reaches a superstate visited before. A chain visits each
+/// superstate at most once, so the walk ends after at most `superstates.len()`
+/// steps. A cycle is reported only from its earliest declared member, at that
+/// member's link.
+fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<syn::Error>) {
+    for (start, superstate) in superstates.iter().enumerate() {
+        let mut chain = vec![start];
+        let mut current = superstate;
+
+        while let Some(next) = parent_index(superstates, current) {
+            if next == start {
+                let is_earliest = chain.iter().all(|&member| member >= start);
+
+                if is_earliest && let Some(link) = &superstate.superstate {
+                    let names: Vec<String> = chain
+                        .iter()
+                        .chain([&start])
+                        .map(|&member| superstates[member].handler.to_string())
+                        .collect();
+
+                    push_error(
+                        errors,
+                        syn::Error::new_spanned(
+                            link,
+                            format!("superstate cycle detected: {}", names.join(" -> ")),
+                        ),
+                    );
+                }
+
+                break;
+            }
+
+            if chain.contains(&next) {
+                break;
+            }
+
+            chain.push(next);
+            current = &superstates[next];
+        }
+    }
+}
+
 // MARK: Names
 
 /// Return the PascalCase form of a snake_case `ident`, as in `door_open` to `DoorOpen`.
@@ -1547,6 +1612,65 @@ mod tests {
         assert!(
             message.starts_with("superstate not found"),
             "unexpected message: {message}"
+        );
+    }
+
+    #[test]
+    fn superstate_cycle_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl Lamp {
+                #[superstate(superstate = a)]
+                fn c() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = b)]
+                fn a() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = a)]
+                fn b() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_superstate_cycles(&nodes.superstates, &mut errors);
+
+        assert_eq!(messages(errors), ["superstate cycle detected: a -> b -> a"]);
+    }
+
+    #[test]
+    fn independent_errors_are_combined() {
+        let nodes = nodes(parse_quote! {
+            impl Door {
+                #[state(superstate = missing, entry_action = absent)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_links(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.actions,
+            &mut errors,
+        );
+
+        let Some(error) = errors else {
+            panic!("the unknown superstate and entry action should be reported");
+        };
+
+        assert_eq!(error.clone().into_iter().count(), 2);
+        assert_eq!(
+            messages(Some(error)),
+            ["entry action not found", "superstate not found"]
         );
     }
 
