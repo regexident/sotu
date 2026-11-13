@@ -346,6 +346,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
         event_type,
         context_type,
         exit_type,
+        declares_exit: _,
         state,
         superstate,
         initial,
@@ -599,21 +600,39 @@ fn parent_method(enum_name: &Ident, parents: &ParentDispatchIr) -> TokenStream {
 fn parent_arm(enum_name: &Ident, superstate: &Ident, arm: &ParentArmIr) -> TokenStream {
     let pattern = pattern(enum_name, &arm.pattern);
 
-    match &arm.parent {
-        Some(ParentIr { variant, fields }) => {
+    let parent = parent_value(superstate, arm.parent.as_ref());
+
+    quote! {
+        #pattern => #parent,
+    }
+}
+
+/// Generate the optional superstate value that `parent` describes.
+fn parent_value(superstate: &Ident, parent: Option<&ParentIr>) -> TokenStream {
+    match parent {
+        Some(ParentIr {
+            variant,
+            is_mount: true,
+            ..
+        }) => quote! {
+            ::core::option::Option::Some(#superstate::#variant(::sotu::SubmachineNode::Mount))
+        },
+        Some(ParentIr {
+            variant,
+            fields,
+            is_mount: false,
+        }) => {
             let fields = fields
                 .iter()
                 .map(|ParentFieldIr { name, value }| field_initializer(name, value.as_ref()));
 
             quote! {
-                #pattern => ::core::option::Option::Some(#superstate::#variant {
+                ::core::option::Option::Some(#superstate::#variant {
                     #(#fields),*
-                }),
+                })
             }
         }
-        None => quote! {
-            #pattern => ::core::option::Option::None,
-        },
+        None => quote!(::core::option::Option::None),
     }
 }
 
