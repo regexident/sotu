@@ -54,6 +54,13 @@ mod superstate {
     }
 }
 
+mod submachine {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/submachine/pass/**/*.rs"]).and_check();
+    }
+}
+
 mod action {
     #[test]
     pub fn pass() {
