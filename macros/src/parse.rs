@@ -557,6 +557,8 @@ pub(crate) enum ItemAttribute {
     State(StateArgs),
     /// The item is a superstate handler.
     Superstate(SuperstateArgs),
+    /// The item is the handler of a mounted submachine.
+    Submachine(SubmachineArgs),
     /// The item is an entry or exit action.
     Action,
 }
@@ -591,6 +593,19 @@ pub(crate) struct SuperstateArgs {
     pub(crate) initial: Option<Expr>,
     /// The extra borrowed fields, in declaration order.
     pub(crate) local_storage: Vec<(Ident, Type)>,
+}
+
+/// The arguments of `#[submachine]`.
+#[derive(Default)]
+pub(crate) struct SubmachineArgs {
+    /// The type of the mounted machine.
+    pub(crate) machine: Option<Type>,
+    /// The field of the shared storage that holds the mounted machine.
+    pub(crate) field: Option<Ident>,
+    /// The name of the generated variants, replacing the one derived from the handler.
+    pub(crate) name: Option<Ident>,
+    /// The handler name of the enclosing superstate.
+    pub(crate) superstate: Option<Ident>,
 }
 
 impl StateArgs {
@@ -681,6 +696,78 @@ impl Parse for SuperstateArgs {
         arguments.local_storage = local_storage;
 
         Ok(arguments)
+    }
+}
+
+impl SubmachineArgs {
+    /// The keys of `#[submachine]`.
+    const KEYS: &[&str] = &["machine", "field", "name", "superstate"];
+
+    /// Store the `key = ident` argument `key`.
+    fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        let ident = ident_value(value)?;
+
+        if key == "field" {
+            self.field = Some(ident);
+        } else if key == "name" {
+            self.name = Some(ident);
+        } else {
+            self.superstate = Some(ident);
+        }
+
+        Ok(())
+    }
+}
+
+impl Parse for SubmachineArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut arguments = Self::default();
+        let mut entries: Vec<(Ident, Expr)> = Vec::new();
+        let mut errors = None;
+
+        // A syntax error leaves the stream in an unknown position, so it ends the
+        // loop while keeping the errors found so far. The machine is a type, which
+        // does not parse as the expression every other value is.
+        while !input.is_empty() {
+            if is_type_argument(input, "machine") {
+                match parse_type_argument(input) {
+                    Ok((key, _)) if arguments.machine.is_some() => push_error(
+                        &mut errors,
+                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                    ),
+                    Ok((_, machine)) => arguments.machine = Some(machine),
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            let (key, value) = match parse_key_value(input, Self::KEYS) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    push_error(&mut errors, error);
+
+                    break;
+                }
+            };
+
+            let validated = validate_key_value(&key, &value, Self::KEYS, &entries)
+                .and_then(|()| arguments.set_key_value(&key, &value));
+
+            match validated {
+                Ok(()) => entries.push((key, value)),
+                Err(error) => push_error(&mut errors, error),
+            }
+        }
+
+        match errors {
+            Some(error) => Err(error),
+            None => Ok(arguments),
+        }
     }
 }
 
@@ -827,7 +914,9 @@ pub(crate) fn parse_item_attribute(attribute: &Attribute) -> syn::Result<Option<
         "superstate" => parse_superstate_args(attribute)
             .map(|arguments| Some(ItemAttribute::Superstate(arguments))),
         "action" => parse_action_args(attribute).map(|()| Some(ItemAttribute::Action)),
-        "submachine" | "exit_handler" => Err(syn::Error::new_spanned(
+        "submachine" => parse_submachine_args(attribute)
+            .map(|arguments| Some(ItemAttribute::Submachine(arguments))),
+        "exit_handler" => Err(syn::Error::new_spanned(
             attribute,
             format!("`#[{name}]` is not supported here"),
         )),
@@ -853,6 +942,17 @@ fn parse_superstate_args(attribute: &Attribute) -> syn::Result<SuperstateArgs> {
         Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
             name_value,
             "`#[superstate]` takes no value",
+        )),
+    }
+}
+
+fn parse_submachine_args(attribute: &Attribute) -> syn::Result<SubmachineArgs> {
+    match &attribute.meta {
+        Meta::Path(_) => Ok(SubmachineArgs::default()),
+        Meta::List(list) => list.parse_args(),
+        Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
+            name_value,
+            "`#[submachine]` takes no value",
         )),
     }
 }
@@ -1083,6 +1183,25 @@ mod tests {
         assert!(arguments.exit_action.is_some_and(|name| name == "leave"));
         assert_eq!(quote!(#initial).to_string(), "State :: on (0)");
         assert_eq!(fields, ["started : & 'sub mut bool", "count : & 'sub u8"]);
+    }
+
+    #[test]
+    fn submachine_arguments_read_every_key() {
+        let attribute: Attribute = parse_quote! {
+            #[submachine(machine = door::Door, field = door, name = Loading, superstate = group)]
+        };
+
+        let Ok(Some(ItemAttribute::Submachine(arguments))) = parse_item_attribute(&attribute)
+        else {
+            panic!("the attribute should parse as a submachine");
+        };
+
+        let machine = arguments.machine;
+
+        assert_eq!(quote!(#machine).to_string(), "door :: Door");
+        assert!(arguments.field.is_some_and(|name| name == "door"));
+        assert!(arguments.name.is_some_and(|name| name == "Loading"));
+        assert!(arguments.superstate.is_some_and(|name| name == "group"));
     }
 
     #[test]
