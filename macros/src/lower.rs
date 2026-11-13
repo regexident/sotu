@@ -277,6 +277,7 @@ struct ActionNode<'model> {
 const SHARED_STORAGE: &str = "shared_storage";
 const EVENT: &str = "event";
 const CONTEXT: &str = "context";
+const SUBMACHINE: &str = "submachine";
 
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
@@ -843,7 +844,9 @@ fn lower_pattern(variant: &Ident, fields: &[FieldModel], inputs: &[InputKind]) -
         .iter()
         .filter_map(|input| match input {
             InputKind::LocalStorage { name, .. } => Some(name.clone()),
-            InputKind::Receiver | InputKind::Event | InputKind::Context => None,
+            InputKind::Receiver | InputKind::Event | InputKind::Context | InputKind::Submachine => {
+                None
+            }
         })
         .collect();
 
@@ -866,6 +869,7 @@ fn argument(input: &InputKind) -> Ident {
         InputKind::Receiver => generated_ident(SHARED_STORAGE),
         InputKind::Event => generated_ident(EVENT),
         InputKind::Context => generated_ident(CONTEXT),
+        InputKind::Submachine => generated_ident(SUBMACHINE),
         InputKind::LocalStorage { name, .. } => name.clone(),
     }
 }

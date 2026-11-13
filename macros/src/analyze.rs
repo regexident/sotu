@@ -9,8 +9,8 @@ use syn::{
 };
 
 use crate::parse::{
-    ItemAttribute, MachineArgs, StateArgs, StateTypeArgs, SuperstateArgs, parse_item_attribute,
-    push_error,
+    ItemAttribute, MachineArgs, StateArgs, StateTypeArgs, SubmachineArgs, SuperstateArgs,
+    parse_item_attribute, push_error,
 };
 
 // MARK: Model
@@ -45,6 +45,8 @@ pub(crate) struct Model {
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
     pub(crate) superstates: Vec<SuperstateModel>,
+    /// The mounted submachines in declaration order.
+    pub(crate) mounts: Vec<MountModel>,
     /// The entry and exit actions in declaration order.
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
@@ -132,6 +134,31 @@ pub(crate) struct SuperstateModel {
     pub(crate) docs: Vec<Attribute>,
 }
 
+/// A submachine mounted as a composite node of the machine.
+///
+/// The mount is a variant of both node enums: the state variant holds the
+/// child's active state, and the superstate variant represents the mount node
+/// and the child's superstates below it.
+pub(crate) struct MountModel {
+    /// The name of the mount handler, which handles the events that reach the
+    /// mount node.
+    pub(crate) handler: Ident,
+    /// The name of the generated variants.
+    pub(crate) variant: Ident,
+    /// The name of the generated constructors.
+    pub(crate) constructor: Ident,
+    /// The type of the mounted machine.
+    pub(crate) machine: Type,
+    /// The field of the shared storage that holds the mounted machine.
+    pub(crate) field: Ident,
+    /// The handler name of the enclosing superstate or mount.
+    pub(crate) superstate: Option<Ident>,
+    /// The classified inputs of the mount handler, in declaration order.
+    pub(crate) inputs: Vec<InputKind>,
+    /// The doc comments of the mount handler.
+    pub(crate) docs: Vec<Attribute>,
+}
+
 /// A local storage field of a state.
 pub(crate) struct FieldModel {
     /// The name of the field.
@@ -162,6 +189,9 @@ pub(crate) enum InputKind {
     Event,
     /// The context input, named `context` unless `context_identifier` renames it.
     Context,
+    /// The `submachine` input of a mount handler, which borrows the storage of
+    /// the mounted machine.
+    Submachine,
     /// A reference to the local storage field called `name`.
     LocalStorage {
         /// The name of the field.
@@ -201,6 +231,8 @@ struct Nodes {
     states: Vec<StateModel>,
     /// The superstate handlers.
     superstates: Vec<SuperstateModel>,
+    /// The mount handlers.
+    mounts: Vec<MountModel>,
     /// The entry and exit actions.
     actions: Vec<ActionModel>,
     /// The type behind the first event input.
@@ -216,6 +248,8 @@ enum Role {
     State,
     /// A `#[superstate]` handler.
     Superstate,
+    /// A `#[submachine]` handler.
+    Submachine,
     /// An `#[action]`.
     Action,
 }
@@ -241,6 +275,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         Nodes {
             states,
             superstates,
+            mounts,
             actions,
             event_type,
             context_inputs,
@@ -288,6 +323,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         },
         states,
         superstates,
+        mounts,
         actions,
         generics: item.generics.clone(),
         item,
@@ -319,12 +355,13 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut errors = None;
     let mut states = Vec::new();
     let mut superstates = Vec::new();
+    let mut mounts = Vec::new();
     let mut actions = Vec::new();
     let mut event_type = None;
     let mut context_inputs = Vec::new();
 
     for impl_item in &mut item.items {
-        let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
+        let Some((attribute, source)) = take_item_attribute(impl_item, &mut errors) else {
             continue;
         };
 
@@ -353,6 +390,17 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     &mut errors,
                 ));
             }
+            (ItemAttribute::Submachine(submachine_arguments), ImplItem::Fn(function)) => {
+                check_signature(function, Role::Submachine, names, &mut errors);
+                mounts.push(analyze_mount(
+                    function,
+                    submachine_arguments,
+                    &source,
+                    names,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 check_signature(function, Role::Action, names, &mut errors);
                 actions.push(analyze_action(function, names));
@@ -368,6 +416,13 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     "`#[superstate]` can only be applied to functions",
                 ),
             ),
+            (ItemAttribute::Submachine(_), _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[submachine]` can only be applied to functions",
+                ),
+            ),
             (ItemAttribute::Action, _) => push_error(
                 &mut errors,
                 syn::Error::new_spanned(
@@ -381,6 +436,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let nodes = Nodes {
         states,
         superstates,
+        mounts,
         actions,
         event_type,
         context_inputs,
@@ -389,11 +445,12 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     (nodes, errors)
 }
 
-/// Remove the attributes of `sotu` from `item`, returning the one it carried.
+/// Remove the attributes of `sotu` from `item`, returning the one it carried
+/// together with its source, at which diagnostics about missing keys point.
 fn take_item_attribute(
     item: &mut ImplItem,
     errors: &mut Option<syn::Error>,
-) -> Option<ItemAttribute> {
+) -> Option<(ItemAttribute, Attribute)> {
     let attributes = match item {
         ImplItem::Const(item) => &mut item.attrs,
         ImplItem::Fn(item) => &mut item.attrs,
@@ -407,7 +464,7 @@ fn take_item_attribute(
     attributes.retain(|attribute| match parse_item_attribute(attribute) {
         Ok(None) => true,
         Ok(Some(item_attribute)) => {
-            taken = Some(item_attribute);
+            taken = Some((item_attribute, attribute.clone()));
 
             false
         }
@@ -526,6 +583,7 @@ fn check_generics(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Er
     let kind = match role {
         Role::State => "state handlers",
         Role::Superstate => "superstate handlers",
+        Role::Submachine => "submachine handlers",
         Role::Action => "actions",
     };
 
@@ -640,27 +698,32 @@ fn check_inputs_by_reference(
     }
 }
 
-/// Classify the inputs of a handler.
+/// Classify the inputs of the handler `function` of the kind `role`.
 ///
 /// Only state handlers have `#[default]` attributes taken from their inputs, so
-/// `takes_defaults` leaves the attribute in place on a superstate handler, where
-/// [`check_default_attributes`] reports it. Inputs that are not local storage
-/// are skipped, since [`check_input_patterns`] and [`check_inputs_by_reference`]
-/// report them.
+/// on any other handler the attribute stays in place, where
+/// [`check_default_attributes`] reports it. Only a mount handler has a
+/// `submachine` input, so on any other handler an input of that name is local
+/// storage. Inputs that are not local storage are skipped, since
+/// [`check_input_patterns`] and [`check_inputs_by_reference`] report them.
 fn handler_inputs(
     function: &mut ImplItemFn,
-    takes_defaults: bool,
+    role: Role,
     names: &InputNames,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> Vec<InputKind> {
     let mut inputs = Vec::new();
+    let submachine = Ident::new("submachine", Span::call_site());
 
     for input in &mut function.sig.inputs {
         match input {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
             FnArg::Typed(typed) if is_named(typed, &names.context) => {
                 inputs.push(InputKind::Context);
+            }
+            FnArg::Typed(typed) if role == Role::Submachine && is_named(typed, &submachine) => {
+                inputs.push(InputKind::Submachine);
             }
             FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
                 Ok(referent) => {
@@ -674,7 +737,7 @@ fn handler_inputs(
                     continue;
                 };
 
-                let default = if takes_defaults {
+                let default = if role == Role::State {
                     take_default(&mut typed.attrs, errors)
                 } else {
                     None
@@ -703,7 +766,7 @@ fn analyze_superstate(
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, false, names, event_type, errors);
+    let inputs = handler_inputs(function, Role::Superstate, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(borrowed_field).collect();
 
@@ -730,6 +793,63 @@ fn analyze_superstate(
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
         initial: arguments.initial,
+        docs,
+    }
+}
+
+/// Classify the mount handler `function` into a [`MountModel`].
+///
+/// A missing `machine` or `field` is reported at `attribute`. The mount is
+/// still modeled, with a placeholder in place of the missing value, so that the
+/// links naming it resolve and the missing key stays the only diagnostic. The
+/// reported error keeps any code from being generated for the placeholder.
+fn analyze_mount(
+    function: &mut ImplItemFn,
+    arguments: SubmachineArgs,
+    attribute: &Attribute,
+    names: &InputNames,
+    event_type: &mut Option<Type>,
+    errors: &mut Option<syn::Error>,
+) -> MountModel {
+    let handler = function.sig.ident.clone();
+    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
+    let constructor = snake_case(&variant);
+    let inputs = handler_inputs(function, Role::Submachine, names, event_type, errors);
+
+    let machine = arguments.machine.unwrap_or_else(|| {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                attribute,
+                "missing `machine = …`; name the submachine's type",
+            ),
+        );
+
+        parse_quote!(())
+    });
+
+    let field = arguments.field.unwrap_or_else(|| {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                attribute,
+                "missing `field = …`; name the field holding the submachine's storage",
+            ),
+        );
+
+        handler.clone()
+    });
+
+    let docs = handler_docs(function);
+
+    MountModel {
+        handler,
+        variant,
+        constructor,
+        machine,
+        field,
+        superstate: arguments.superstate,
+        inputs,
         docs,
     }
 }
@@ -776,7 +896,7 @@ fn analyze_state(
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, true, names, event_type, errors);
+    let inputs = handler_inputs(function, Role::State, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(input_field).collect();
 
@@ -896,7 +1016,7 @@ fn input_field(input: &InputKind) -> Option<FieldModel> {
             ty: ty.clone(),
             default: default.clone(),
         }),
-        InputKind::Receiver | InputKind::Event | InputKind::Context => None,
+        InputKind::Receiver | InputKind::Event | InputKind::Context | InputKind::Submachine => None,
     }
 }
 
@@ -1822,6 +1942,101 @@ mod tests {
             messages(errors),
             ["state `b` lacks field `counter` required by superstate `group`"]
         );
+    }
+
+    #[test]
+    fn mount_is_modeled() {
+        let model = model(parse_quote! {
+            impl House {
+                /// Loads the door.
+                #[submachine(machine = door::Door, field = door, name = Loading, superstate = group)]
+                fn load(&mut self, event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let [mount] = model.mounts.as_slice() else {
+            panic!("the machine should have one mount");
+        };
+
+        let machine = &mount.machine;
+
+        assert_eq!(mount.handler, ident("load"));
+        assert_eq!(mount.variant, ident("Loading"));
+        assert_eq!(mount.constructor, ident("loading"));
+        assert_eq!(quote!(#machine).to_string(), "door :: Door");
+        assert_eq!(mount.field, ident("door"));
+        assert_eq!(mount.superstate, Some(ident("group")));
+        assert_eq!(mount.inputs, [InputKind::Receiver, InputKind::Event]);
+        assert_eq!(mount.docs.len(), 1);
+
+        let ImplItem::Fn(function) = &model.item.items[0] else {
+            panic!("the mount handler should stay a function");
+        };
+
+        assert!(
+            !function
+                .attrs
+                .iter()
+                .any(|attribute| attribute.path().is_ident("submachine"))
+        );
+
+        let (_, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl House {
+                    #[submachine(field = door)]
+                    fn untyped() -> Outcome<State> {
+                        Super
+                    }
+
+                    #[submachine(machine = door::Door)]
+                    fn unstored() -> Outcome<State> {
+                        Super
+                    }
+                }
+            },
+            &names(),
+        );
+
+        assert_eq!(
+            messages(errors),
+            [
+                "missing `machine = …`; name the submachine's type",
+                "missing `field = …`; name the field holding the submachine's storage",
+            ]
+        );
+    }
+
+    #[test]
+    fn submachine_input_is_classified() {
+        let model = model(parse_quote! {
+            impl House {
+                #[submachine(machine = door::Door, field = door)]
+                fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[state]
+                fn on(submachine: &mut u8) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        assert_eq!(
+            model.mounts[0].inputs,
+            [InputKind::Submachine, InputKind::Event]
+        );
+        assert!(matches!(
+            model.states[0].inputs.as_slice(),
+            [InputKind::LocalStorage { name, .. }] if *name == "submachine"
+        ));
     }
 
     #[test]
