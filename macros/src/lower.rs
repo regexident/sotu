@@ -11,7 +11,7 @@ use syn::{
 };
 
 use crate::analyze::{
-    ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, StateModel,
+    ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, MountModel, StateModel,
     SuperstateModel,
 };
 
@@ -27,8 +27,39 @@ pub(crate) struct Ir {
     pub(crate) machine: MachineIr,
     /// The implementation of the blocking `State` trait.
     pub(crate) dispatch: DispatchIr,
-    /// The generated superstate enum, if the machine has superstates.
+    /// The generated superstate enum, if the machine has superstates or mounts.
     pub(crate) superstate: Option<SuperstateIr>,
+    /// The mounted submachines in declaration order.
+    pub(crate) mounts: Vec<MountIr>,
+}
+
+/// A submachine mounted as a composite node.
+///
+/// The mount adds a variant holding the child's state to the state enum, and a
+/// variant holding a `sotu::SubmachineNode` to the superstate enum, which stands for the mount node itself or for a superstate of the
+/// child below it.
+pub(crate) struct MountIr {
+    /// The doc comments copied from the mount handler.
+    pub(crate) docs: Vec<Attribute>,
+    /// The name of the variants.
+    pub(crate) variant: Ident,
+    /// The name of the constructors.
+    pub(crate) constructor: Ident,
+    /// The type of the mounted machine.
+    pub(crate) machine: Type,
+    /// The field of the shared storage that holds the mounted machine.
+    pub(crate) field: Ident,
+    /// The type of the state variant's value, the child's state type.
+    pub(crate) state_type: Type,
+    /// The type of the superstate variant's value, a `SubmachineNode` over the
+    /// child's superstate type.
+    pub(crate) superstate_type: Type,
+    /// The call to the mount handler.
+    pub(crate) handler: CallIr,
+    /// Whether the mount handler takes the `submachine` input.
+    pub(crate) takes_submachine: bool,
+    /// The node enclosing the mount node, or `None` for a top-level mount.
+    pub(crate) parent: Option<ParentIr>,
 }
 
 /// The generated state enum and its constructors.
@@ -77,6 +108,9 @@ pub(crate) struct MachineIr {
     pub(crate) context_type: Type,
     /// The type of the exit points of the machine.
     pub(crate) exit_type: Type,
+    /// Whether the machine declares its exit type, which otherwise is
+    /// `Infallible` and lets the machine be mounted without an exit handler.
+    pub(crate) declares_exit: bool,
     /// The type of the state enum.
     pub(crate) state: NodeTypeIr,
     /// The superstate enum, or `None` if the associated type is `()`.
@@ -235,6 +269,9 @@ pub(crate) struct ParentIr {
     pub(crate) variant: Ident,
     /// The fields of the variant.
     pub(crate) fields: Vec<ParentFieldIr>,
+    /// Whether the parent is a mount node, whose variant holds
+    /// `SubmachineNode::Mount` instead of fields.
+    pub(crate) is_mount: bool,
 }
 
 /// A borrowed field of a parent.
@@ -263,6 +300,15 @@ pub(crate) struct CallIr {
     pub(crate) function: Ident,
     /// The arguments of the call, in the order the function declares its inputs.
     pub(crate) arguments: Vec<Ident>,
+}
+
+/// A node that other nodes link to with `superstate = handler`.
+#[derive(Clone, Copy)]
+enum ParentNode<'model> {
+    /// A `#[superstate]` handler.
+    Superstate(&'model SuperstateModel),
+    /// A `#[submachine]` handler, whose mount node has no fields.
+    Mount(&'model MountModel),
 }
 
 /// The parts of a state or superstate that action dispatch reads.
@@ -302,6 +348,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
             event_type: model.event_type.clone(),
             context_type: model.context_type.clone(),
             exit_type: model.exit_type.clone(),
+            declares_exit: model.declares_exit,
             state: state.clone(),
             superstate: superstate_type.clone(),
             initial: model.initial.clone(),
@@ -335,7 +382,47 @@ pub(crate) fn lower(model: &Model) -> Ir {
                 .map(|superstate| lower_state_parents(model, superstate)),
         },
         superstate: superstate_type.map(|ty| lower_superstate(model, ty, state)),
+        mounts: model
+            .mounts
+            .iter()
+            .map(|mount| lower_mount(model, mount))
+            .collect(),
     }
+}
+
+// MARK: Mounts
+
+fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
+    let parent = find_parent(model, mount.superstate.as_ref());
+
+    MountIr {
+        docs: mount.docs.clone(),
+        variant: mount.variant.clone(),
+        constructor: mount.constructor.clone(),
+        machine: mount.machine.clone(),
+        field: mount.field.clone(),
+        state_type: mount_state_type(mount),
+        superstate_type: mount_superstate_type(mount),
+        handler: lower_call(&mount.handler, &mount.inputs),
+        takes_submachine: mount.inputs.contains(&InputKind::Submachine),
+        parent: parent.map(|parent| lower_parent(parent, |_| None)),
+    }
+}
+
+/// Return the child's state type, which the mount's state variant holds.
+fn mount_state_type(mount: &MountModel) -> Type {
+    let machine = &mount.machine;
+
+    parse_quote!(<#machine as ::sotu::private::Submachine>::State)
+}
+
+/// Return the type the mount's superstate variant holds: the mount node itself
+/// or a superstate of the child borrowing from the child's active state for
+/// `'sub`.
+fn mount_superstate_type(mount: &MountModel) -> Type {
+    let machine = &mount.machine;
+
+    parse_quote!(::sotu::SubmachineNode<<#machine as ::sotu::private::Submachine>::Superstate<'sub>>)
 }
 
 fn lower_variant(state: &StateModel) -> VariantIr {
@@ -439,19 +526,24 @@ impl<'ast> Visit<'ast> for Mentions {
     }
 }
 
-/// Return the parameters of the impl block that the fields of the states mention.
+/// Return the parameters of the impl block that the fields of the states and
+/// the child states of the mounts mention.
 fn state_generics(model: &Model) -> Generics {
     let fields = model.states.iter().flat_map(|state| &state.fields);
+    let mounts: Vec<Type> = model.mounts.iter().map(mount_state_type).collect();
 
-    select_generics(&model.generics, fields.map(|field| &field.ty))
+    select_generics(
+        &model.generics,
+        fields.map(|field| &field.ty).chain(&mounts),
+    )
 }
 
 /// Return `'sub` and the parameters of the impl block that the fields of the
-/// superstates mention.
+/// superstates and the child superstates of the mounts mention.
 ///
-/// Every borrowed field mentions `'sub`, so the enum declares it exactly when a
-/// variant borrows a field, and declares it first, ahead of the parameters of
-/// the impl block.
+/// Every borrowed field and every mount mentions `'sub`, so the enum declares
+/// it exactly when a variant borrows a field or holds a mount, and declares it
+/// first, ahead of the parameters of the impl block.
 fn superstate_generics(model: &Model) -> Generics {
     let mut candidates = model.generics.clone();
 
@@ -462,7 +554,9 @@ fn superstate_generics(model: &Model) -> Generics {
         .iter()
         .flat_map(|superstate| &superstate.fields);
 
-    select_generics(&candidates, fields.map(|field| &field.ty))
+    let mounts: Vec<Type> = model.mounts.iter().map(mount_superstate_type).collect();
+
+    select_generics(&candidates, fields.map(|field| &field.ty).chain(&mounts))
 }
 
 /// Return the parameters of `candidates` that `types` mention, in declaration
@@ -596,9 +690,10 @@ fn where_predicates(predicates: Punctuated<WherePredicate, Token![,]>) -> Option
 
 // MARK: Superstates
 
-/// Return the type of the superstate enum, or `None` if the machine has no superstates.
+/// Return the type of the superstate enum, or `None` if the machine has neither
+/// superstates nor mounts.
 fn lower_superstate_type(model: &Model) -> Option<NodeTypeIr> {
-    if model.superstates.is_empty() {
+    if model.superstates.is_empty() && model.mounts.is_empty() {
         return None;
     }
 
@@ -609,11 +704,18 @@ fn lower_superstate_type(model: &Model) -> Option<NodeTypeIr> {
 }
 
 fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> SuperstateIr {
+    // A mount handler's `submachine` input is borrowed from the shared storage.
     let takes = |input: &InputKind| {
+        let mount_takes = |mount: &MountModel| {
+            mount.inputs.contains(input)
+                || (*input == InputKind::Receiver && mount.inputs.contains(&InputKind::Submachine))
+        };
+
         model
             .superstates
             .iter()
             .any(|superstate| superstate.inputs.contains(input))
+            || model.mounts.iter().any(mount_takes)
     };
 
     SuperstateIr {
@@ -674,7 +776,7 @@ fn lower_state_parents(model: &Model, superstate: NodeTypeIr) -> ParentDispatchI
             .states
             .iter()
             .map(|state| {
-                let parent = find_superstate(model, state.superstate.as_ref());
+                let parent = find_parent(model, state.superstate.as_ref());
 
                 lower_parent_arm(&state.variant, &state.fields, parent, |_| None)
             })
@@ -689,7 +791,7 @@ fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDisp
             .superstates
             .iter()
             .map(|child| {
-                let parent = find_superstate(model, child.superstate.as_ref());
+                let parent = find_parent(model, child.superstate.as_ref());
 
                 lower_parent_arm(&child.variant, &child.fields, parent, |field| {
                     Some(reborrow(field))
@@ -699,25 +801,42 @@ fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDisp
     }
 }
 
-fn find_superstate<'model>(
-    model: &'model Model,
-    link: Option<&Ident>,
-) -> Option<&'model SuperstateModel> {
+/// Return the superstate or mount that `link` names, if it exists.
+fn find_parent<'model>(model: &'model Model, link: Option<&Ident>) -> Option<ParentNode<'model>> {
     let name = link?;
 
-    model
+    let superstate = model
         .superstates
         .iter()
         .find(|superstate| superstate.handler == *name)
+        .map(ParentNode::Superstate);
+
+    superstate.or_else(|| {
+        model
+            .mounts
+            .iter()
+            .find(|mount| mount.handler == *name)
+            .map(ParentNode::Mount)
+    })
+}
+
+impl ParentNode<'_> {
+    /// Return the fields the parent borrows from its child.
+    fn fields(&self) -> &[FieldModel] {
+        match self {
+            Self::Superstate(superstate) => &superstate.fields,
+            Self::Mount(_) => &[],
+        }
+    }
 }
 
 fn lower_parent_arm(
     variant: &Ident,
     fields: &[FieldModel],
-    parent: Option<&SuperstateModel>,
+    parent: Option<ParentNode<'_>>,
     value: impl Fn(&FieldModel) -> Option<Expr>,
 ) -> ParentArmIr {
-    let parent_fields = parent.map_or(&[][..], |parent| parent.fields.as_slice());
+    let parent_fields = parent.as_ref().map_or(&[][..], ParentNode::fields);
     let bindings: Vec<Ident> = parent_fields
         .iter()
         .map(|field| field.name.clone())
@@ -729,16 +848,28 @@ fn lower_parent_arm(
             has_rest: bindings.len() < fields.len(),
             bindings,
         },
-        parent: parent.map(|parent| ParentIr {
-            variant: parent.variant.clone(),
-            fields: parent_fields
-                .iter()
-                .map(|field| ParentFieldIr {
-                    name: field.name.clone(),
-                    value: value(field),
-                })
-                .collect(),
-        }),
+        parent: parent.map(|parent| lower_parent(parent, value)),
+    }
+}
+
+/// Lower `parent`, building each of its fields with `value`.
+fn lower_parent(parent: ParentNode<'_>, value: impl Fn(&FieldModel) -> Option<Expr>) -> ParentIr {
+    let variant = match parent {
+        ParentNode::Superstate(superstate) => &superstate.variant,
+        ParentNode::Mount(mount) => &mount.variant,
+    };
+
+    ParentIr {
+        variant: variant.clone(),
+        fields: parent
+            .fields()
+            .iter()
+            .map(|field| ParentFieldIr {
+                name: field.name.clone(),
+                value: value(field),
+            })
+            .collect(),
+        is_mount: matches!(parent, ParentNode::Mount(_)),
     }
 }
 
@@ -896,7 +1027,7 @@ fn parameter(name: &str, is_used: bool) -> Ident {
 ///
 /// Mixed-site hygiene keeps it apart from a local storage field of the same
 /// name, which the match arms bind with the span of the user's code.
-fn generated_ident(name: &str) -> Ident {
+pub(crate) fn generated_ident(name: &str) -> Ident {
     Ident::new(name, Span::mixed_site())
 }
 

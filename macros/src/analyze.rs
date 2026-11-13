@@ -39,6 +39,8 @@ pub(crate) struct Model {
     pub(crate) context_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
+    /// Whether `#[state_machine]` declares the exit type with `exit = Type`.
+    pub(crate) declares_exit: bool,
     /// The functions that observe dispatch and transitions.
     pub(crate) hooks: HooksModel,
     /// The states in declaration order.
@@ -312,6 +314,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
         event_identifier: names.event,
         context_identifier: names.context,
+        declares_exit: arguments.exit.is_some(),
         exit_type: arguments
             .exit
             .unwrap_or_else(|| parse_quote!(::core::convert::Infallible)),
