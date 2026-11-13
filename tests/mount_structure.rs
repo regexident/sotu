@@ -274,6 +274,80 @@ mod house {
     }
 }
 
+mod inner {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    pub struct Inner;
+
+    impl Default for Inner {
+        fn default() -> Self {
+            trace::record("inner created");
+
+            Self
+        }
+    }
+
+    #[state_machine(initial = State::leaf())]
+    impl Inner {
+        #[state(entry_action = enter_leaf)]
+        fn leaf() -> Outcome<State> {
+            Handled
+        }
+
+        #[action]
+        fn enter_leaf() {
+            trace::record("enter inner leaf");
+        }
+    }
+}
+
+mod outer {
+    use sotu::prelude::*;
+
+    use super::{inner, trace};
+
+    pub struct Outer {
+        pub inner: Option<inner::Inner>,
+    }
+
+    impl Default for Outer {
+        fn default() -> Self {
+            trace::record("outer created");
+
+            Self { inner: None }
+        }
+    }
+
+    #[state_machine(initial = Superstate::nested())]
+    impl Outer {
+        #[submachine(machine = inner::Inner, field = inner)]
+        fn nested() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
+mod nest {
+    use sotu::prelude::*;
+
+    use super::outer;
+
+    #[derive(Default)]
+    pub struct Nest {
+        pub outer: Option<outer::Outer>,
+    }
+
+    #[state_machine(initial = Superstate::holding())]
+    impl Nest {
+        #[submachine(machine = outer::Outer, field = outer)]
+        fn holding() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
 use house::{Enter, House, Leave, Light, Peek, Shut, Toggle, Visit};
 
 /// Return an initialized `House` in `idle`, with an empty trace.
@@ -353,6 +427,24 @@ fn parent_leaf_under_mount_keeps_instance() {
     assert_eq!(trace::take(), ["exit opened", "exit frame", "enter annex"]);
     assert!(matches!(machine.state(), house::State::Annex {}));
     assert!(machine.door.is_some());
+}
+
+#[test]
+fn nested_mount_lives_in_child_field() {
+    let machine = nest::Nest::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    assert_eq!(
+        trace::take(),
+        ["outer created", "inner created", "enter inner leaf"]
+    );
+    assert!(
+        machine
+            .outer
+            .as_ref()
+            .is_some_and(|outer| outer.inner.is_some())
+    );
 }
 
 #[test]
