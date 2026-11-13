@@ -283,8 +283,8 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         mut errors,
     ) = collect_nodes(&mut item, &names);
 
-    check_duplicate_variants(&states, &superstates, &mut errors);
-    check_links(&states, &superstates, &actions, &mut errors);
+    check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
+    check_links(&states, &superstates, &mounts, &actions, &mut errors);
     check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
     check_custom_with_derives(&arguments.state, &mut errors);
 
@@ -504,22 +504,24 @@ fn check_action_references(
     }
 }
 
-/// Report every `superstate` link that names no `#[superstate]` handler.
+/// Report every `superstate` link that names neither a `#[superstate]` nor a
+/// `#[submachine]` handler.
 fn check_superstate_references(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     errors: &mut Option<syn::Error>,
 ) {
     let links = states
         .iter()
         .map(|state| &state.superstate)
-        .chain(superstates.iter().map(|superstate| &superstate.superstate));
+        .chain(superstates.iter().map(|superstate| &superstate.superstate))
+        .chain(mounts.iter().map(|mount| &mount.superstate));
+
+    let composites = composite_nodes(superstates, mounts);
 
     for name in links.flatten() {
-        if !superstates
-            .iter()
-            .any(|superstate| superstate.handler == *name)
-        {
+        if !composites.iter().any(|(handler, _)| *handler == name) {
             push_error(
                 errors,
                 syn::Error::new_spanned(name, "superstate not found"),
@@ -531,16 +533,26 @@ fn check_superstate_references(
 /// Report every variant that repeats the name of an earlier variant of the same enum.
 ///
 /// States and superstates become variants of separate enums, so a state and a
-/// superstate may share a variant name.
+/// superstate may share a variant name. A mount becomes a variant of both
+/// enums, so its name must differ from every state and every superstate.
 fn check_duplicate_variants(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     errors: &mut Option<syn::Error>,
 ) {
-    let state_variants: Vec<&Ident> = states.iter().map(|state| &state.variant).collect();
+    let mount_variants = mounts.iter().map(|mount| &mount.variant);
+
+    let state_variants: Vec<&Ident> = states
+        .iter()
+        .map(|state| &state.variant)
+        .chain(mount_variants.clone())
+        .collect();
+
     let superstate_variants: Vec<&Ident> = superstates
         .iter()
         .map(|superstate| &superstate.variant)
+        .chain(mount_variants)
         .collect();
 
     for variants in [state_variants, superstate_variants] {
@@ -1043,45 +1055,71 @@ fn event_referent(typed: &PatType) -> syn::Result<&Type> {
 fn check_links(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     actions: &[ActionModel],
     errors: &mut Option<syn::Error>,
 ) {
     check_action_references(states, superstates, actions, errors);
-    check_superstate_references(states, superstates, errors);
-    check_superstate_cycles(superstates, errors);
+    check_superstate_references(states, superstates, mounts, errors);
+    check_superstate_cycles(superstates, mounts, errors);
     check_superstate_fields(states, superstates, errors);
 }
 
-/// Return the index of the superstate that `superstate` links to, if it exists.
-fn parent_index(superstates: &[SuperstateModel], superstate: &SuperstateModel) -> Option<usize> {
-    let link = superstate.superstate.as_ref()?;
+/// A node that other nodes can sit in: its handler name and its own
+/// `superstate` link.
+type CompositeNode<'model> = (&'model Ident, Option<&'model Ident>);
 
+/// Return the superstates, then the mounts, as composite nodes.
+fn composite_nodes<'model>(
+    superstates: &'model [SuperstateModel],
+    mounts: &'model [MountModel],
+) -> Vec<CompositeNode<'model>> {
     superstates
         .iter()
-        .position(|candidate| candidate.handler == *link)
+        .map(|superstate| (&superstate.handler, superstate.superstate.as_ref()))
+        .chain(
+            mounts
+                .iter()
+                .map(|mount| (&mount.handler, mount.superstate.as_ref())),
+        )
+        .collect()
 }
 
-/// Report every cycle of `superstate` links, once per cycle.
-///
-/// Each superstate's chain of links is followed until it returns to the
-/// superstate, ends, or reaches a superstate visited before. A chain visits each
-/// superstate at most once, so the walk ends after at most `superstates.len()`
-/// steps. A cycle is reported only from its earliest declared member, at that
-/// member's link.
-fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<syn::Error>) {
-    for (start, superstate) in superstates.iter().enumerate() {
-        let mut chain = vec![start];
-        let mut current = superstate;
+/// Return the index of the node that the node at `index` links to, if it exists.
+fn parent_index(nodes: &[CompositeNode<'_>], index: usize) -> Option<usize> {
+    let link = nodes[index].1?;
 
-        while let Some(next) = parent_index(superstates, current) {
+    nodes.iter().position(|(handler, _)| *handler == link)
+}
+
+/// Report every cycle of `superstate` links between superstates and mounts,
+/// once per cycle.
+///
+/// Each node's chain of links is followed until it returns to the node, ends,
+/// or reaches a node visited before. A chain visits each node at most once, so
+/// the walk ends after at most as many steps as there are nodes. A cycle is
+/// reported only from its earliest member, superstates counting before mounts,
+/// at that member's link.
+fn check_superstate_cycles(
+    superstates: &[SuperstateModel],
+    mounts: &[MountModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let nodes = composite_nodes(superstates, mounts);
+
+    for (start, (_, start_link)) in nodes.iter().enumerate() {
+        let mut chain = vec![start];
+        let mut current = start;
+
+        while let Some(next) = parent_index(&nodes, current) {
             if next == start {
                 let is_earliest = chain.iter().all(|&member| member >= start);
 
-                if is_earliest && let Some(link) = &superstate.superstate {
+                if is_earliest && let Some(link) = start_link {
                     let names: Vec<String> = chain
                         .iter()
                         .chain([&start])
-                        .map(|&member| superstates[member].handler.to_string())
+                        .map(|&member| nodes[member].0.to_string())
                         .collect();
 
                     push_error(
@@ -1101,7 +1139,7 @@ fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<
             }
 
             chain.push(next);
-            current = &superstates[next];
+            current = next;
         }
     }
 }
@@ -1695,7 +1733,12 @@ mod tests {
 
         let mut errors = None;
 
-        check_duplicate_variants(&nodes.states, &nodes.superstates, &mut errors);
+        check_duplicate_variants(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
 
         assert_eq!(messages(errors), ["duplicate variant `Idle`"]);
     }
@@ -1903,7 +1946,7 @@ mod tests {
 
         let mut errors = None;
 
-        check_superstate_cycles(&nodes.superstates, &mut errors);
+        check_superstate_cycles(&nodes.superstates, &nodes.mounts, &mut errors);
 
         assert_eq!(messages(errors), ["superstate cycle detected: a -> b -> a"]);
     }
@@ -2040,6 +2083,80 @@ mod tests {
     }
 
     #[test]
+    fn mounts_take_part_in_superstate_links() {
+        let model = model(parse_quote! {
+            impl House {
+                #[state(superstate = loading)]
+                fn on() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = door, superstate = group)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(model.states[0].superstate, Some(ident("loading")));
+        assert_eq!(model.mounts[0].superstate, Some(ident("group")));
+
+        let nodes = nodes(parse_quote! {
+            impl House {
+                #[state(name = Loading)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+
+                #[submachine(machine = door::Door, field = door, superstate = group)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = loading)]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, superstate = missing)]
+                fn spare() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_duplicate_variants(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
+        check_superstate_references(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
+        check_superstate_cycles(&nodes.superstates, &nodes.mounts, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "duplicate variant `Loading`",
+                "superstate not found",
+                "superstate cycle detected: group -> loading -> group",
+            ]
+        );
+    }
+
+    #[test]
     fn undeclared_context_is_reported_once() {
         let nodes = nodes(parse_quote! {
             impl Writer {
@@ -2123,6 +2240,7 @@ mod tests {
         check_links(
             &nodes.states,
             &nodes.superstates,
+            &nodes.mounts,
             &nodes.actions,
             &mut errors,
         );
