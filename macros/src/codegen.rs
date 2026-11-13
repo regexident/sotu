@@ -404,6 +404,16 @@ fn submachine_impls(machine: &MachineIr) -> TokenStream {
     let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
 
+    // Without `exit = Type` the exit type is `Infallible`, so the machine can be
+    // mounted without an exit handler.
+    let exitless = (!machine.declares_exit).then(|| {
+        quote! {
+            impl #impl_generics ::sotu::private::ExitlessSubmachine for #shared_storage
+            #where_clause
+            {}
+        }
+    });
+
     quote! {
         impl #impl_generics ::sotu::private::Submachine for #shared_storage #where_clause {
             #items
@@ -412,6 +422,8 @@ fn submachine_impls(machine: &MachineIr) -> TokenStream {
         impl #impl_generics ::sotu::private::BlockingSubmachine for #shared_storage
         #where_clause
         {}
+
+        #exitless
     }
 }
 
@@ -487,23 +499,29 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
         .map(|arm| dispatch_arm(name, shared_storage, arm))
         .chain(mount_arms);
 
-    let entry_action = entry_actions.as_ref().map(|actions| {
-        action_method(
-            name,
-            shared_storage,
-            context_type,
-            &format_ident!("call_entry_action"),
-            actions,
-        )
-    });
+    let leaves: Vec<&Ident> = dispatch
+        .arms
+        .iter()
+        .map(|arm| &arm.pattern.variant)
+        .collect();
 
-    let exit_action = exit_actions.as_ref().map(|actions| {
-        action_method(
+    let [entry_action, exit_action] = [
+        (format_ident!("call_entry_action"), entry_actions),
+        (format_ident!("call_exit_action"), exit_actions),
+    ]
+    .map(|(method, actions)| {
+        let mount_arms = mounts
+            .iter()
+            .map(|mount| state_lifecycle_arm(name, mount, &method));
+
+        lifecycle_method(
             name,
             shared_storage,
             context_type,
-            &format_ident!("call_exit_action"),
-            actions,
+            &method,
+            actions.as_ref(),
+            &leaves,
+            mount_arms.collect(),
         )
     });
 
@@ -638,6 +656,12 @@ fn with_mount_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
         predicates.push(parse_quote_spanned! {machine.span()=>
             #machine: ::sotu::private::BlockingSubmachine
         });
+
+        // Without an exit handler, the parent has nowhere to route an exit of
+        // the child, so the child must not be able to exit.
+        predicates.push(parse_quote_spanned! {machine.span()=>
+            #machine: ::sotu::private::ExitlessSubmachine
+        });
     }
 
     generics
@@ -689,23 +713,25 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
         .map(|arm| dispatch_arm(name, shared_storage, arm))
         .chain(mount_arms);
 
-    let entry_action = entry_actions.as_ref().map(|actions| {
-        action_method(
-            name,
-            shared_storage,
-            context_type,
-            &format_ident!("call_entry_action"),
-            actions,
-        )
-    });
+    let composites: Vec<&Ident> = variants.iter().map(|variant| &variant.name).collect();
 
-    let exit_action = exit_actions.as_ref().map(|actions| {
-        action_method(
+    let [entry_action, exit_action] = [
+        (format_ident!("call_entry_action"), entry_actions),
+        (format_ident!("call_exit_action"), exit_actions),
+    ]
+    .map(|(method, actions)| {
+        let mount_arms = mounts
+            .iter()
+            .map(|mount| superstate_lifecycle_arms(name, mount, &method));
+
+        lifecycle_method(
             name,
             shared_storage,
             context_type,
-            &format_ident!("call_exit_action"),
-            actions,
+            &method,
+            actions.as_ref(),
+            &composites,
+            mount_arms.collect(),
         )
     });
 
@@ -1015,4 +1041,128 @@ fn expression_path(ty: &Type) -> TokenStream {
     }
 
     quote!(#path)
+}
+
+// MARK: Mount Lifecycle
+
+/// Generate the entry or exit action `method` of a node enum.
+///
+/// Without `mount_arms`, the method exists only if a node has an action.
+/// Otherwise it always exists, because entering and leaving a mount creates
+/// and drops the child's instance and runs the child's actions. Each of the
+/// `variants` then gets an arm from `actions`, or an empty arm if no node of
+/// the enum has an action.
+fn lifecycle_method(
+    enum_name: &Ident,
+    shared_storage: &Type,
+    context_type: &Type,
+    method: &Ident,
+    actions: Option<&ActionDispatchIr>,
+    variants: &[&Ident],
+    mount_arms: Vec<TokenStream>,
+) -> Option<TokenStream> {
+    if mount_arms.is_empty() {
+        return actions.map(|actions| {
+            action_method(enum_name, shared_storage, context_type, method, actions)
+        });
+    }
+
+    // The mount arms use both parameters, so neither is underscored.
+    let shared_storage_parameter = generated_ident("shared_storage");
+    let context_parameter = generated_ident("context");
+
+    let arms: Vec<TokenStream> = match actions {
+        Some(actions) => actions
+            .arms
+            .iter()
+            .map(|arm| action_arm(enum_name, shared_storage, arm))
+            .collect(),
+        None => variants
+            .iter()
+            .map(|variant| quote!(#enum_name::#variant { .. } => {}))
+            .collect(),
+    };
+
+    Some(quote! {
+        fn #method<'ctx, 'data: 'ctx>(
+            &mut self,
+            #shared_storage_parameter: &mut #shared_storage,
+            #context_parameter: &mut #context_type,
+        ) {
+            match self {
+                #(#arms)*
+                #(#mount_arms)*
+            }
+        }
+    })
+}
+
+/// Generate the arm of the state action `method` for `mount`, which runs the
+/// same action of the child's state on the child's storage.
+fn state_lifecycle_arm(enum_name: &Ident, mount: &MountIr, method: &Ident) -> TokenStream {
+    let variant = &mount.variant;
+    let child_action = child_action(mount, &child_state_trait(&mount.machine), method);
+
+    quote! {
+        #enum_name::#variant(state) => #child_action,
+    }
+}
+
+/// Generate the arms of the superstate action `method` for `mount`.
+///
+/// Entering the mount node fills an empty instance field with a new child, and
+/// leaving it releases the field, so an `Option` field is `Some` exactly while
+/// the mount node is active. Since the mount node is entered before and left
+/// after every node of the child, the child's actions always find its storage.
+/// A superstate of the child runs the same action of the child's superstate on
+/// the child's storage.
+fn superstate_lifecycle_arms(enum_name: &Ident, mount: &MountIr, method: &Ident) -> TokenStream {
+    let variant = &mount.variant;
+
+    let mount_node = if method == "call_entry_action" {
+        field_call(mount, "DefaultInstance", "fill_default")
+    } else {
+        field_call(mount, "MountField", "release")
+    };
+
+    let child_action = child_action(mount, &child_superstate_trait(&mount.machine), method);
+
+    quote! {
+        #enum_name::#variant(::sotu::SubmachineNode::Mount) => #mount_node,
+        #enum_name::#variant(::sotu::SubmachineNode::Inner(state)) => #child_action,
+    }
+}
+
+/// Generate the call of the child's action `method` through `child_trait` on
+/// the node bound as `state`, with the child's storage and the parent's
+/// context.
+///
+/// The storage is absent only when user code emptied an active instance
+/// field, and the action is then skipped.
+fn child_action(mount: &MountIr, child_trait: &TokenStream, method: &Ident) -> TokenStream {
+    let submachine = generated_ident("submachine");
+    let context = generated_ident("context");
+    let storage = field_call(mount, "MountField", "get_mut");
+
+    quote! {
+        if let ::core::option::Option::Some(#submachine) = #storage {
+            #child_trait::#method(state, #submachine, #context);
+        }
+    }
+}
+
+/// Generate the call of `::sotu::private::<trait_name>::<C>::<method>` on the
+/// mount's field of the shared storage.
+///
+/// Every token of the call is spanned at the value of the `field` key, so a
+/// field of the wrong type is reported there.
+fn field_call(mount: &MountIr, trait_name: &str, method: &str) -> TokenStream {
+    let MountIr { machine, field, .. } = mount;
+    let shared_storage = generated_ident("shared_storage");
+    let trait_name = Ident::new(trait_name, field.span());
+    let method = Ident::new(method, field.span());
+
+    quote_spanned! {field.span()=>
+        ::sotu::private::#trait_name::<#machine>::#method(&mut #shared_storage.#field)
+    }
 }
