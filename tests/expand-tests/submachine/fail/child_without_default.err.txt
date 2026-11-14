@@ -1,0 +1,19 @@
+error[E0277]: the trait bound `Door: Default` is not satisfied
+  --> /tests/expand-tests/submachine/fail/child_without_default.rs:22:1
+   |
+22 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `Door`
+...
+29 |     #[submachine(machine = door::Door, field = door)]
+   |                                                ---- required by a bound introduced by this call
+   |
+   = help: the trait `DefaultInstance<C>` is implemented for `Option<C>`
+   = note: required for `Option<Door>` to implement `DefaultInstance<Door>`
+help: consider annotating `Door` with `#[derive(Default)]`
+   |
+ 6 +     #[derive(Default)]
+ 7 |     pub struct Door;
+   |
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
