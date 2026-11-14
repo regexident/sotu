@@ -199,6 +199,112 @@ where
             _ => false,
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            State::Loading(node) => {
+                match House::__project_into_loading(
+                    event,
+                    |event| {
+                        <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            door::Door,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+            _ => (true, event),
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut House,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<Self, ::core::convert::Infallible, ()> {
+        match self {
+            State::Loading(node) => {
+                let mount_offset = <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                    door::Door,
+                >>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    door::Door,
+                >::get_mut(&mut shared_storage.door) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = House::__project_into_loading(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            door::Door,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Loading(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Loading(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+            _ => {
+                let outcome = ::sotu::blocking::State::<
+                    House,
+                >::call_handler(self, shared_storage, &event, context);
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: event,
+                }
+            }
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<House> for Superstate<'sub>
 where
@@ -306,6 +412,116 @@ where
             _ => false,
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            Superstate::Loading(::sotu::SubmachineNode::Inner(node)) => {
+                match House::__project_into_loading(
+                    event,
+                    |event| {
+                        <<door::Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            door::Door,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+            _ => (true, event),
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut House,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<State, ::core::convert::Infallible, ()> {
+        match self {
+            Superstate::Loading(::sotu::SubmachineNode::Inner(node)) => {
+                let mount_offset = <<door::Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::SuperstateExt<door::Door>>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    door::Door,
+                >::get_mut(&mut shared_storage.door) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = House::__project_into_loading(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<door::Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            door::Door,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Loading(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Loading(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+            _ => {
+                let outcome = ::sotu::blocking::Superstate::<
+                    House,
+                >::call_handler(self, shared_storage, &event, context);
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: event,
+                }
+            }
+        }
+    }
 }
 impl ::sotu::private::Submachine for House {
     type Event = ();
@@ -319,6 +535,36 @@ impl ::sotu::private::Submachine for House {
 }
 impl ::sotu::private::BlockingSubmachine for House {}
 impl ::sotu::private::ExitlessSubmachine for House {}
+impl House {
+    #[doc(hidden)]
+    #[allow(unreachable_code)]
+    fn __project_into_loading<Visited>(
+        event: (),
+        visit: impl ::core::ops::FnOnce(
+            <door::Door as ::sotu::private::Submachine>::Event,
+        ) -> (Visited, <door::Door as ::sotu::private::Submachine>::Event),
+    ) -> ::core::result::Result<(Visited, ()), ()> {
+        if !<<door::Door as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::accepts(&event) {
+            return ::core::result::Result::Err(event);
+        }
+        match <<door::Door as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::project(event) {
+            ::core::result::Result::Ok(child_event) => {
+                let (visited, child_event) = visit(child_event);
+                ::core::result::Result::Ok((
+                    visited,
+                    <<door::Door as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                        (),
+                    >>::embed(child_event),
+                ))
+            }
+            ::core::result::Result::Err(event) => ::core::result::Result::Err(event),
+        }
+    }
+}
 fn main() {
     let mut machine = House::default().state_machine();
     machine.step(&mut ());

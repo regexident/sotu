@@ -242,6 +242,112 @@ where
             _ => false,
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            State::Cooling(node) => {
+                match Room::__project_into_cooling(
+                    event,
+                    |event| {
+                        <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            fan::Fan,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+            _ => (true, event),
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut Room,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<Self, ::core::convert::Infallible, ()> {
+        match self {
+            State::Cooling(node) => {
+                let mount_offset = <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                    fan::Fan,
+                >>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    fan::Fan,
+                >::get_mut(&mut shared_storage.fan) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = Room::__project_into_cooling(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            fan::Fan,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Cooling(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Cooling(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+            _ => {
+                let outcome = ::sotu::blocking::State::<
+                    Room,
+                >::call_handler(self, shared_storage, &event, context);
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: event,
+                }
+            }
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<Room> for Superstate<'sub>
 where
@@ -352,6 +458,116 @@ where
             _ => false,
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            Superstate::Cooling(::sotu::SubmachineNode::Inner(node)) => {
+                match Room::__project_into_cooling(
+                    event,
+                    |event| {
+                        <<fan::Fan as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            fan::Fan,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+            _ => (true, event),
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut Room,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<State, ::core::convert::Infallible, ()> {
+        match self {
+            Superstate::Cooling(::sotu::SubmachineNode::Inner(node)) => {
+                let mount_offset = <<fan::Fan as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::SuperstateExt<fan::Fan>>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    fan::Fan,
+                >::get_mut(&mut shared_storage.fan) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = Room::__project_into_cooling(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<fan::Fan as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            fan::Fan,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Cooling(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Cooling(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+            _ => {
+                let outcome = ::sotu::blocking::Superstate::<
+                    Room,
+                >::call_handler(self, shared_storage, &event, context);
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: event,
+                }
+            }
+        }
+    }
 }
 impl ::sotu::private::Submachine for Room {
     type Event = ();
@@ -365,6 +581,36 @@ impl ::sotu::private::Submachine for Room {
 }
 impl ::sotu::private::BlockingSubmachine for Room {}
 impl ::sotu::private::ExitlessSubmachine for Room {}
+impl Room {
+    #[doc(hidden)]
+    #[allow(unreachable_code)]
+    fn __project_into_cooling<Visited>(
+        event: (),
+        visit: impl ::core::ops::FnOnce(
+            <fan::Fan as ::sotu::private::Submachine>::Event,
+        ) -> (Visited, <fan::Fan as ::sotu::private::Submachine>::Event),
+    ) -> ::core::result::Result<(Visited, ()), ()> {
+        if !<<fan::Fan as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::accepts(&event) {
+            return ::core::result::Result::Err(event);
+        }
+        match <<fan::Fan as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::project(event) {
+            ::core::result::Result::Ok(child_event) => {
+                let (visited, child_event) = visit(child_event);
+                ::core::result::Result::Ok((
+                    visited,
+                    <<fan::Fan as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                        (),
+                    >>::embed(child_event),
+                ))
+            }
+            ::core::result::Result::Err(event) => ::core::result::Result::Err(event),
+        }
+    }
+}
 fn main() {
     let mut machine = Room::default().state_machine();
     machine.step(&mut ());

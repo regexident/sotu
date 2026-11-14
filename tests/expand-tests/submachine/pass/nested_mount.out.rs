@@ -187,6 +187,102 @@ mod outer {
                 }
             }
         }
+        fn __is_addressed(&self, event: ()) -> (bool, ()) {
+            match self {
+                State::Nested(node) => {
+                    match Outer::__project_into_nested(
+                        event,
+                        |event| {
+                            <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                                inner::Inner,
+                            >>::__is_addressed(node, event)
+                        },
+                    ) {
+                        ::core::result::Result::Ok(addressed) => addressed,
+                        ::core::result::Result::Err(event) => (false, event),
+                    }
+                }
+            }
+        }
+        #[allow(unreachable_code)]
+        fn __dispatch<'ctx, 'data: 'ctx>(
+            &mut self,
+            shared_storage: &mut Outer,
+            event: (),
+            context: &mut (),
+        ) -> ::sotu::private::Dispatched<Self, ::core::convert::Infallible, ()> {
+            match self {
+                State::Nested(node) => {
+                    let mount_offset = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        inner::Inner,
+                    >>::depth(node);
+                    let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                        inner::Inner,
+                    >::get_mut(&mut shared_storage.inner) else {
+                        return ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        };
+                    };
+                    let visited = Outer::__project_into_nested(
+                        event,
+                        |event| {
+                            let ::sotu::private::Dispatched { outcome, event } = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                                inner::Inner,
+                            >>::__dispatch(node, submachine, event, context);
+                            (outcome, event)
+                        },
+                    );
+                    match visited {
+                        ::core::result::Result::Ok((outcome, event)) => {
+                            ::sotu::private::Dispatched {
+                                outcome: match outcome {
+                                    ::sotu::private::NodeOutcome::Handled => {
+                                        ::sotu::private::NodeOutcome::Handled
+                                    }
+                                    ::sotu::private::NodeOutcome::Super => {
+                                        ::sotu::private::NodeOutcome::Super
+                                    }
+                                    ::sotu::private::NodeOutcome::Transition(target) => {
+                                        ::sotu::private::NodeOutcome::Transition(
+                                            State::Nested(target),
+                                        )
+                                    }
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target,
+                                        handler_offset,
+                                    } => {
+                                        ::sotu::private::NodeOutcome::ExternalTransition {
+                                            target: State::Nested(target),
+                                            handler_offset,
+                                        }
+                                    }
+                                    ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    } => {
+                                        ::sotu::private::NodeOutcome::DeferToMount {
+                                            mount_offset,
+                                        }
+                                    }
+                                },
+                                event: event,
+                            }
+                        }
+                        ::core::result::Result::Err(event) => {
+                            ::sotu::private::Dispatched {
+                                outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                },
+                                event: event,
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     impl<'sub> ::sotu::blocking::Superstate<Outer> for Superstate<'sub>
     where
@@ -298,6 +394,116 @@ mod outer {
                 _ => false,
             }
         }
+        fn __is_addressed(&self, event: ()) -> (bool, ()) {
+            match self {
+                Superstate::Nested(::sotu::SubmachineNode::Inner(node)) => {
+                    match Outer::__project_into_nested(
+                        event,
+                        |event| {
+                            <<inner::Inner as ::sotu::blocking::IntoStateMachine>::Superstate<
+                                '_,
+                            > as ::sotu::blocking::Superstate<
+                                inner::Inner,
+                            >>::__is_addressed(node, event)
+                        },
+                    ) {
+                        ::core::result::Result::Ok(addressed) => addressed,
+                        ::core::result::Result::Err(event) => (false, event),
+                    }
+                }
+                _ => (true, event),
+            }
+        }
+        #[allow(unreachable_code)]
+        fn __dispatch<'ctx, 'data: 'ctx>(
+            &mut self,
+            shared_storage: &mut Outer,
+            event: (),
+            context: &mut (),
+        ) -> ::sotu::private::Dispatched<State, ::core::convert::Infallible, ()> {
+            match self {
+                Superstate::Nested(::sotu::SubmachineNode::Inner(node)) => {
+                    let mount_offset = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::Superstate<
+                        '_,
+                    > as ::sotu::blocking::SuperstateExt<inner::Inner>>::depth(node);
+                    let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                        inner::Inner,
+                    >::get_mut(&mut shared_storage.inner) else {
+                        return ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        };
+                    };
+                    let visited = Outer::__project_into_nested(
+                        event,
+                        |event| {
+                            let ::sotu::private::Dispatched { outcome, event } = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::Superstate<
+                                '_,
+                            > as ::sotu::blocking::Superstate<
+                                inner::Inner,
+                            >>::__dispatch(node, submachine, event, context);
+                            (outcome, event)
+                        },
+                    );
+                    match visited {
+                        ::core::result::Result::Ok((outcome, event)) => {
+                            ::sotu::private::Dispatched {
+                                outcome: match outcome {
+                                    ::sotu::private::NodeOutcome::Handled => {
+                                        ::sotu::private::NodeOutcome::Handled
+                                    }
+                                    ::sotu::private::NodeOutcome::Super => {
+                                        ::sotu::private::NodeOutcome::Super
+                                    }
+                                    ::sotu::private::NodeOutcome::Transition(target) => {
+                                        ::sotu::private::NodeOutcome::Transition(
+                                            State::Nested(target),
+                                        )
+                                    }
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target,
+                                        handler_offset,
+                                    } => {
+                                        ::sotu::private::NodeOutcome::ExternalTransition {
+                                            target: State::Nested(target),
+                                            handler_offset,
+                                        }
+                                    }
+                                    ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    } => {
+                                        ::sotu::private::NodeOutcome::DeferToMount {
+                                            mount_offset,
+                                        }
+                                    }
+                                },
+                                event: event,
+                            }
+                        }
+                        ::core::result::Result::Err(event) => {
+                            ::sotu::private::Dispatched {
+                                outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                },
+                                event: event,
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    let outcome = ::sotu::blocking::Superstate::<
+                        Outer,
+                    >::call_handler(self, shared_storage, &event, context);
+                    ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::from(outcome),
+                        event: event,
+                    }
+                }
+            }
+        }
     }
     impl ::sotu::private::Submachine for Outer {
         type Event = ();
@@ -311,6 +517,36 @@ mod outer {
     }
     impl ::sotu::private::BlockingSubmachine for Outer {}
     impl ::sotu::private::ExitlessSubmachine for Outer {}
+    impl Outer {
+        #[doc(hidden)]
+        #[allow(unreachable_code)]
+        fn __project_into_nested<Visited>(
+            event: (),
+            visit: impl ::core::ops::FnOnce(
+                <inner::Inner as ::sotu::private::Submachine>::Event,
+            ) -> (Visited, <inner::Inner as ::sotu::private::Submachine>::Event),
+        ) -> ::core::result::Result<(Visited, ()), ()> {
+            if !<<inner::Inner as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                (),
+            >>::accepts(&event) {
+                return ::core::result::Result::Err(event);
+            }
+            match <<inner::Inner as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                (),
+            >>::project(event) {
+                ::core::result::Result::Ok(child_event) => {
+                    let (visited, child_event) = visit(child_event);
+                    ::core::result::Result::Ok((
+                        visited,
+                        <<inner::Inner as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                            (),
+                        >>::embed(child_event),
+                    ))
+                }
+                ::core::result::Result::Err(event) => ::core::result::Result::Err(event),
+            }
+        }
+    }
 }
 pub struct Nest {
     outer: Option<outer::Outer>,
@@ -435,6 +671,102 @@ where
             }
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            State::Holding(node) => {
+                match Nest::__project_into_holding(
+                    event,
+                    |event| {
+                        <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            outer::Outer,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut Nest,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<Self, ::core::convert::Infallible, ()> {
+        match self {
+            State::Holding(node) => {
+                let mount_offset = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                    outer::Outer,
+                >>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    outer::Outer,
+                >::get_mut(&mut shared_storage.outer) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = Nest::__project_into_holding(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            outer::Outer,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Holding(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Holding(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<Nest> for Superstate<'sub>
 where
@@ -544,6 +876,116 @@ where
             _ => false,
         }
     }
+    fn __is_addressed(&self, event: ()) -> (bool, ()) {
+        match self {
+            Superstate::Holding(::sotu::SubmachineNode::Inner(node)) => {
+                match Nest::__project_into_holding(
+                    event,
+                    |event| {
+                        <<outer::Outer as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            outer::Outer,
+                        >>::__is_addressed(node, event)
+                    },
+                ) {
+                    ::core::result::Result::Ok(addressed) => addressed,
+                    ::core::result::Result::Err(event) => (false, event),
+                }
+            }
+            _ => (true, event),
+        }
+    }
+    #[allow(unreachable_code)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut Nest,
+        event: (),
+        context: &mut (),
+    ) -> ::sotu::private::Dispatched<State, ::core::convert::Infallible, ()> {
+        match self {
+            Superstate::Holding(::sotu::SubmachineNode::Inner(node)) => {
+                let mount_offset = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::SuperstateExt<outer::Outer>>::depth(node);
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    outer::Outer,
+                >::get_mut(&mut shared_storage.outer) else {
+                    return ::sotu::private::Dispatched {
+                        outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                            mount_offset,
+                        },
+                        event: event,
+                    };
+                };
+                let visited = Nest::__project_into_holding(
+                    event,
+                    |event| {
+                        let ::sotu::private::Dispatched { outcome, event } = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::Superstate<
+                            '_,
+                        > as ::sotu::blocking::Superstate<
+                            outer::Outer,
+                        >>::__dispatch(node, submachine, event, context);
+                        (outcome, event)
+                    },
+                );
+                match visited {
+                    ::core::result::Result::Ok((outcome, event)) => {
+                        ::sotu::private::Dispatched {
+                            outcome: match outcome {
+                                ::sotu::private::NodeOutcome::Handled => {
+                                    ::sotu::private::NodeOutcome::Handled
+                                }
+                                ::sotu::private::NodeOutcome::Super => {
+                                    ::sotu::private::NodeOutcome::Super
+                                }
+                                ::sotu::private::NodeOutcome::Transition(target) => {
+                                    ::sotu::private::NodeOutcome::Transition(
+                                        State::Holding(target),
+                                    )
+                                }
+                                ::sotu::private::NodeOutcome::ExternalTransition {
+                                    target,
+                                    handler_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::ExternalTransition {
+                                        target: State::Holding(target),
+                                        handler_offset,
+                                    }
+                                }
+                                ::sotu::private::NodeOutcome::Exit(exit) => match exit {}
+                                ::sotu::private::NodeOutcome::DeferToMount {
+                                    mount_offset,
+                                } => {
+                                    ::sotu::private::NodeOutcome::DeferToMount {
+                                        mount_offset,
+                                    }
+                                }
+                            },
+                            event: event,
+                        }
+                    }
+                    ::core::result::Result::Err(event) => {
+                        ::sotu::private::Dispatched {
+                            outcome: ::sotu::private::NodeOutcome::DeferToMount {
+                                mount_offset,
+                            },
+                            event: event,
+                        }
+                    }
+                }
+            }
+            _ => {
+                let outcome = ::sotu::blocking::Superstate::<
+                    Nest,
+                >::call_handler(self, shared_storage, &event, context);
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: event,
+                }
+            }
+        }
+    }
 }
 impl ::sotu::private::Submachine for Nest {
     type Event = ();
@@ -557,6 +999,36 @@ impl ::sotu::private::Submachine for Nest {
 }
 impl ::sotu::private::BlockingSubmachine for Nest {}
 impl ::sotu::private::ExitlessSubmachine for Nest {}
+impl Nest {
+    #[doc(hidden)]
+    #[allow(unreachable_code)]
+    fn __project_into_holding<Visited>(
+        event: (),
+        visit: impl ::core::ops::FnOnce(
+            <outer::Outer as ::sotu::private::Submachine>::Event,
+        ) -> (Visited, <outer::Outer as ::sotu::private::Submachine>::Event),
+    ) -> ::core::result::Result<(Visited, ()), ()> {
+        if !<<outer::Outer as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::accepts(&event) {
+            return ::core::result::Result::Err(event);
+        }
+        match <<outer::Outer as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+            (),
+        >>::project(event) {
+            ::core::result::Result::Ok(child_event) => {
+                let (visited, child_event) = visit(child_event);
+                ::core::result::Result::Ok((
+                    visited,
+                    <<outer::Outer as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<
+                        (),
+                    >>::embed(child_event),
+                ))
+            }
+            ::core::result::Result::Err(event) => ::core::result::Result::Err(event),
+        }
+    }
+}
 fn main() {
     let mut machine = Nest::default().state_machine();
     machine.step(&mut ());
