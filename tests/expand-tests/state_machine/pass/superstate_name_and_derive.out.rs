@@ -103,6 +103,7 @@ impl ::sotu::private::Submachine for Blinker {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Blinker {}
+impl ::sotu::private::ExitlessSubmachine for Blinker {}
 fn main() {
     let mut machine = Blinker.state_machine();
     machine.step(&mut ());

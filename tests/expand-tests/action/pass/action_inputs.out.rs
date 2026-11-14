@@ -95,6 +95,7 @@ impl ::sotu::private::Submachine for Probe {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Probe {}
+impl ::sotu::private::ExitlessSubmachine for Probe {}
 mod no_receiver {
     use sotu::prelude::*;
     pub struct Silent;
@@ -173,6 +174,7 @@ mod no_receiver {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Silent {}
+    impl ::sotu::private::ExitlessSubmachine for Silent {}
 }
 fn main() {
     let mut probe = Probe::default().state_machine();

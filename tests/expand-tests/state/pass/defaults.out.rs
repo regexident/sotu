@@ -72,6 +72,7 @@ impl ::sotu::private::Submachine for Dial {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Dial {}
+impl ::sotu::private::ExitlessSubmachine for Dial {}
 fn main() {
     let mut machine = Dial.state_machine();
     machine.step(&mut ());

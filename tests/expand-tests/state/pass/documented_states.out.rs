@@ -86,6 +86,7 @@ impl ::sotu::private::Submachine for Door {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Door {}
+impl ::sotu::private::ExitlessSubmachine for Door {}
 fn main() {
     let mut machine = Door::default().state_machine();
     machine.handle(Event::Toggle, &mut ());

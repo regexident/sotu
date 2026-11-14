@@ -9,8 +9,8 @@ use syn::{
 };
 
 use crate::parse::{
-    ItemAttribute, MachineArgs, StateArgs, StateTypeArgs, SuperstateArgs, parse_item_attribute,
-    push_error,
+    ItemAttribute, MachineArgs, StateArgs, StateTypeArgs, SubmachineArgs, SuperstateArgs,
+    parse_item_attribute, push_error,
 };
 
 // MARK: Model
@@ -39,12 +39,16 @@ pub(crate) struct Model {
     pub(crate) context_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
+    /// Whether `#[state_machine]` declares the exit type with `exit = Type`.
+    pub(crate) declares_exit: bool,
     /// The functions that observe dispatch and transitions.
     pub(crate) hooks: HooksModel,
     /// The states in declaration order.
     pub(crate) states: Vec<StateModel>,
     /// The superstates in declaration order.
     pub(crate) superstates: Vec<SuperstateModel>,
+    /// The mounted submachines in declaration order.
+    pub(crate) mounts: Vec<MountModel>,
     /// The entry and exit actions in declaration order.
     pub(crate) actions: Vec<ActionModel>,
     /// The impl block with the attributes of `sotu` removed.
@@ -132,6 +136,31 @@ pub(crate) struct SuperstateModel {
     pub(crate) docs: Vec<Attribute>,
 }
 
+/// A submachine mounted as a composite node of the machine.
+///
+/// The mount is a variant of both node enums: the state variant holds the
+/// child's active state, and the superstate variant represents the mount node
+/// and the child's superstates below it.
+pub(crate) struct MountModel {
+    /// The name of the mount handler, which handles the events that reach the
+    /// mount node.
+    pub(crate) handler: Ident,
+    /// The name of the generated variants.
+    pub(crate) variant: Ident,
+    /// The name of the generated constructors.
+    pub(crate) constructor: Ident,
+    /// The type of the mounted machine.
+    pub(crate) machine: Type,
+    /// The field of the shared storage that holds the mounted machine.
+    pub(crate) field: Ident,
+    /// The handler name of the enclosing superstate or mount.
+    pub(crate) superstate: Option<Ident>,
+    /// The classified inputs of the mount handler, in declaration order.
+    pub(crate) inputs: Vec<InputKind>,
+    /// The doc comments of the mount handler.
+    pub(crate) docs: Vec<Attribute>,
+}
+
 /// A local storage field of a state.
 pub(crate) struct FieldModel {
     /// The name of the field.
@@ -162,6 +191,9 @@ pub(crate) enum InputKind {
     Event,
     /// The context input, named `context` unless `context_identifier` renames it.
     Context,
+    /// The `submachine` input of a mount handler, which borrows the storage of
+    /// the mounted machine.
+    Submachine,
     /// A reference to the local storage field called `name`.
     LocalStorage {
         /// The name of the field.
@@ -201,6 +233,8 @@ struct Nodes {
     states: Vec<StateModel>,
     /// The superstate handlers.
     superstates: Vec<SuperstateModel>,
+    /// The mount handlers.
+    mounts: Vec<MountModel>,
     /// The entry and exit actions.
     actions: Vec<ActionModel>,
     /// The type behind the first event input.
@@ -216,6 +250,8 @@ enum Role {
     State,
     /// A `#[superstate]` handler.
     Superstate,
+    /// A `#[submachine]` handler.
+    Submachine,
     /// An `#[action]`.
     Action,
 }
@@ -241,6 +277,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         Nodes {
             states,
             superstates,
+            mounts,
             actions,
             event_type,
             context_inputs,
@@ -248,8 +285,8 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         mut errors,
     ) = collect_nodes(&mut item, &names);
 
-    check_duplicate_variants(&states, &superstates, &mut errors);
-    check_links(&states, &superstates, &actions, &mut errors);
+    check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
+    check_links(&states, &superstates, &mounts, &actions, &mut errors);
     check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
     check_custom_with_derives(&arguments.state, &mut errors);
 
@@ -277,6 +314,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
         event_identifier: names.event,
         context_identifier: names.context,
+        declares_exit: arguments.exit.is_some(),
         exit_type: arguments
             .exit
             .unwrap_or_else(|| parse_quote!(::core::convert::Infallible)),
@@ -288,6 +326,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         },
         states,
         superstates,
+        mounts,
         actions,
         generics: item.generics.clone(),
         item,
@@ -319,12 +358,13 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut errors = None;
     let mut states = Vec::new();
     let mut superstates = Vec::new();
+    let mut mounts = Vec::new();
     let mut actions = Vec::new();
     let mut event_type = None;
     let mut context_inputs = Vec::new();
 
     for impl_item in &mut item.items {
-        let Some(attribute) = take_item_attribute(impl_item, &mut errors) else {
+        let Some((attribute, source)) = take_item_attribute(impl_item, &mut errors) else {
             continue;
         };
 
@@ -353,6 +393,17 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     &mut errors,
                 ));
             }
+            (ItemAttribute::Submachine(submachine_arguments), ImplItem::Fn(function)) => {
+                check_signature(function, Role::Submachine, names, &mut errors);
+                mounts.push(analyze_mount(
+                    function,
+                    submachine_arguments,
+                    &source,
+                    names,
+                    &mut event_type,
+                    &mut errors,
+                ));
+            }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 check_signature(function, Role::Action, names, &mut errors);
                 actions.push(analyze_action(function, names));
@@ -368,6 +419,13 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     "`#[superstate]` can only be applied to functions",
                 ),
             ),
+            (ItemAttribute::Submachine(_), _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[submachine]` can only be applied to functions",
+                ),
+            ),
             (ItemAttribute::Action, _) => push_error(
                 &mut errors,
                 syn::Error::new_spanned(
@@ -381,6 +439,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let nodes = Nodes {
         states,
         superstates,
+        mounts,
         actions,
         event_type,
         context_inputs,
@@ -389,11 +448,12 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     (nodes, errors)
 }
 
-/// Remove the attributes of `sotu` from `item`, returning the one it carried.
+/// Remove the attributes of `sotu` from `item`, returning the one it carried
+/// together with its source, at which diagnostics about missing keys point.
 fn take_item_attribute(
     item: &mut ImplItem,
     errors: &mut Option<syn::Error>,
-) -> Option<ItemAttribute> {
+) -> Option<(ItemAttribute, Attribute)> {
     let attributes = match item {
         ImplItem::Const(item) => &mut item.attrs,
         ImplItem::Fn(item) => &mut item.attrs,
@@ -407,7 +467,7 @@ fn take_item_attribute(
     attributes.retain(|attribute| match parse_item_attribute(attribute) {
         Ok(None) => true,
         Ok(Some(item_attribute)) => {
-            taken = Some(item_attribute);
+            taken = Some((item_attribute, attribute.clone()));
 
             false
         }
@@ -447,22 +507,24 @@ fn check_action_references(
     }
 }
 
-/// Report every `superstate` link that names no `#[superstate]` handler.
+/// Report every `superstate` link that names neither a `#[superstate]` nor a
+/// `#[submachine]` handler.
 fn check_superstate_references(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     errors: &mut Option<syn::Error>,
 ) {
     let links = states
         .iter()
         .map(|state| &state.superstate)
-        .chain(superstates.iter().map(|superstate| &superstate.superstate));
+        .chain(superstates.iter().map(|superstate| &superstate.superstate))
+        .chain(mounts.iter().map(|mount| &mount.superstate));
+
+    let composites = composite_nodes(superstates, mounts);
 
     for name in links.flatten() {
-        if !superstates
-            .iter()
-            .any(|superstate| superstate.handler == *name)
-        {
+        if !composites.iter().any(|(handler, _)| *handler == name) {
             push_error(
                 errors,
                 syn::Error::new_spanned(name, "superstate not found"),
@@ -474,16 +536,26 @@ fn check_superstate_references(
 /// Report every variant that repeats the name of an earlier variant of the same enum.
 ///
 /// States and superstates become variants of separate enums, so a state and a
-/// superstate may share a variant name.
+/// superstate may share a variant name. A mount becomes a variant of both
+/// enums, so its name must differ from every state and every superstate.
 fn check_duplicate_variants(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     errors: &mut Option<syn::Error>,
 ) {
-    let state_variants: Vec<&Ident> = states.iter().map(|state| &state.variant).collect();
+    let mount_variants = mounts.iter().map(|mount| &mount.variant);
+
+    let state_variants: Vec<&Ident> = states
+        .iter()
+        .map(|state| &state.variant)
+        .chain(mount_variants.clone())
+        .collect();
+
     let superstate_variants: Vec<&Ident> = superstates
         .iter()
         .map(|superstate| &superstate.variant)
+        .chain(mount_variants)
         .collect();
 
     for variants in [state_variants, superstate_variants] {
@@ -509,6 +581,11 @@ fn check_signature(
     check_default_attributes(function, role, names, errors);
     check_input_patterns(function, errors);
     check_inputs_by_reference(function, role, names, errors);
+    check_submachine_input(function, role, errors);
+
+    if role == Role::Submachine {
+        check_mount_inputs(function, names, errors);
+    }
 }
 
 /// Report generic parameters declared by `function`.
@@ -526,6 +603,7 @@ fn check_generics(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Er
     let kind = match role {
         Role::State => "state handlers",
         Role::Superstate => "superstate handlers",
+        Role::Submachine => "submachine handlers",
         Role::Action => "actions",
     };
 
@@ -640,27 +718,97 @@ fn check_inputs_by_reference(
     }
 }
 
-/// Classify the inputs of a handler.
+/// Report every local storage input of the mount handler `function`.
+///
+/// A mount's leaves are states of the mounted machine, which have no fields of
+/// the parent to lend, so a mount handler can only take the receiver, the
+/// event, the context and the `submachine` input. Inputs that are not
+/// references are left to [`check_inputs_by_reference`], so that each input is
+/// reported once.
+fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Option<syn::Error>) {
+    let submachine = Ident::new("submachine", Span::call_site());
+
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        let is_local_storage = local_storage_input(typed).is_some()
+            && !is_named(typed, &names.event)
+            && !is_named(typed, &names.context)
+            && !is_named(typed, &submachine);
+
+        if is_local_storage {
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    "submachine handlers can not take state-local storage",
+                ),
+            );
+        }
+    }
+}
+
+/// Report the `submachine` input of `function`, a handler or action of the kind `role`.
+///
+/// Only a mount has a submachine whose storage the input could borrow, so the
+/// input is rejected on every handler but a mount handler. Mounts declare no
+/// actions, so the input is rejected on every action. An input that is not a
+/// reference is left to [`check_inputs_by_reference`], so that it is reported
+/// once.
+fn check_submachine_input(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Error>) {
+    if role == Role::Submachine {
+        return;
+    }
+
+    let submachine = Ident::new("submachine", Span::call_site());
+
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        if is_named(typed, &submachine) && local_storage_input(typed).is_some() {
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    "`submachine` is only available on submachine handlers, their actions and \
+                     exit handlers",
+                ),
+            );
+        }
+    }
+}
+
+/// Classify the inputs of the handler `function` of the kind `role`.
 ///
 /// Only state handlers have `#[default]` attributes taken from their inputs, so
-/// `takes_defaults` leaves the attribute in place on a superstate handler, where
-/// [`check_default_attributes`] reports it. Inputs that are not local storage
-/// are skipped, since [`check_input_patterns`] and [`check_inputs_by_reference`]
-/// report them.
+/// on any other handler the attribute stays in place, where
+/// [`check_default_attributes`] reports it. Only a mount handler has a
+/// `submachine` input, so on any other handler an input of that name is local
+/// storage, which [`check_submachine_input`] reports. Inputs that are not local
+/// storage are skipped, since [`check_input_patterns`] and
+/// [`check_inputs_by_reference`] report them.
 fn handler_inputs(
     function: &mut ImplItemFn,
-    takes_defaults: bool,
+    role: Role,
     names: &InputNames,
     event_type: &mut Option<Type>,
     errors: &mut Option<syn::Error>,
 ) -> Vec<InputKind> {
     let mut inputs = Vec::new();
+    let submachine = Ident::new("submachine", Span::call_site());
 
     for input in &mut function.sig.inputs {
         match input {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
             FnArg::Typed(typed) if is_named(typed, &names.context) => {
                 inputs.push(InputKind::Context);
+            }
+            FnArg::Typed(typed) if role == Role::Submachine && is_named(typed, &submachine) => {
+                inputs.push(InputKind::Submachine);
             }
             FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
                 Ok(referent) => {
@@ -674,7 +822,7 @@ fn handler_inputs(
                     continue;
                 };
 
-                let default = if takes_defaults {
+                let default = if role == Role::State {
                     take_default(&mut typed.attrs, errors)
                 } else {
                     None
@@ -703,7 +851,7 @@ fn analyze_superstate(
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, false, names, event_type, errors);
+    let inputs = handler_inputs(function, Role::Superstate, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(borrowed_field).collect();
 
@@ -730,6 +878,63 @@ fn analyze_superstate(
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
         initial: arguments.initial,
+        docs,
+    }
+}
+
+/// Classify the mount handler `function` into a [`MountModel`].
+///
+/// A missing `machine` or `field` is reported at `attribute`. The mount is
+/// still modeled, with a placeholder in place of the missing value, so that the
+/// links naming it resolve and the missing key stays the only diagnostic. The
+/// reported error keeps any code from being generated for the placeholder.
+fn analyze_mount(
+    function: &mut ImplItemFn,
+    arguments: SubmachineArgs,
+    attribute: &Attribute,
+    names: &InputNames,
+    event_type: &mut Option<Type>,
+    errors: &mut Option<syn::Error>,
+) -> MountModel {
+    let handler = function.sig.ident.clone();
+    let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
+    let constructor = snake_case(&variant);
+    let inputs = handler_inputs(function, Role::Submachine, names, event_type, errors);
+
+    let machine = arguments.machine.unwrap_or_else(|| {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                attribute,
+                "missing `machine = …`; name the submachine's type",
+            ),
+        );
+
+        parse_quote!(())
+    });
+
+    let field = arguments.field.unwrap_or_else(|| {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                attribute,
+                "missing `field = …`; name the field holding the submachine's storage",
+            ),
+        );
+
+        handler.clone()
+    });
+
+    let docs = handler_docs(function);
+
+    MountModel {
+        handler,
+        variant,
+        constructor,
+        machine,
+        field,
+        superstate: arguments.superstate,
+        inputs,
         docs,
     }
 }
@@ -776,7 +981,7 @@ fn analyze_state(
     let handler = function.sig.ident.clone();
     let variant = arguments.name.unwrap_or_else(|| pascal_case(&handler));
     let constructor = snake_case(&variant);
-    let inputs = handler_inputs(function, true, names, event_type, errors);
+    let inputs = handler_inputs(function, Role::State, names, event_type, errors);
 
     let mut fields: Vec<FieldModel> = inputs.iter().filter_map(input_field).collect();
 
@@ -896,7 +1101,7 @@ fn input_field(input: &InputKind) -> Option<FieldModel> {
             ty: ty.clone(),
             default: default.clone(),
         }),
-        InputKind::Receiver | InputKind::Event | InputKind::Context => None,
+        InputKind::Receiver | InputKind::Event | InputKind::Context | InputKind::Submachine => None,
     }
 }
 
@@ -918,50 +1123,78 @@ fn event_referent(typed: &PatType) -> syn::Result<&Type> {
     }
 }
 
-/// Report every link that does not resolve, superstate cycles, and states
-/// lacking a field that a superstate above them borrows.
+/// Report every link that does not resolve, superstate cycles, states lacking a
+/// field that a superstate above them borrows, and superstates with local
+/// storage that contain a mount.
 fn check_links(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     actions: &[ActionModel],
     errors: &mut Option<syn::Error>,
 ) {
     check_action_references(states, superstates, actions, errors);
-    check_superstate_references(states, superstates, errors);
-    check_superstate_cycles(superstates, errors);
+    check_superstate_references(states, superstates, mounts, errors);
+    check_superstate_cycles(superstates, mounts, errors);
     check_superstate_fields(states, superstates, errors);
+    check_superstate_storage(superstates, mounts, errors);
 }
 
-/// Return the index of the superstate that `superstate` links to, if it exists.
-fn parent_index(superstates: &[SuperstateModel], superstate: &SuperstateModel) -> Option<usize> {
-    let link = superstate.superstate.as_ref()?;
+/// A node that other nodes can sit in: its handler name and its own
+/// `superstate` link.
+type CompositeNode<'model> = (&'model Ident, Option<&'model Ident>);
 
+/// Return the superstates, then the mounts, as composite nodes.
+fn composite_nodes<'model>(
+    superstates: &'model [SuperstateModel],
+    mounts: &'model [MountModel],
+) -> Vec<CompositeNode<'model>> {
     superstates
         .iter()
-        .position(|candidate| candidate.handler == *link)
+        .map(|superstate| (&superstate.handler, superstate.superstate.as_ref()))
+        .chain(
+            mounts
+                .iter()
+                .map(|mount| (&mount.handler, mount.superstate.as_ref())),
+        )
+        .collect()
 }
 
-/// Report every cycle of `superstate` links, once per cycle.
-///
-/// Each superstate's chain of links is followed until it returns to the
-/// superstate, ends, or reaches a superstate visited before. A chain visits each
-/// superstate at most once, so the walk ends after at most `superstates.len()`
-/// steps. A cycle is reported only from its earliest declared member, at that
-/// member's link.
-fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<syn::Error>) {
-    for (start, superstate) in superstates.iter().enumerate() {
-        let mut chain = vec![start];
-        let mut current = superstate;
+/// Return the index of the node that the node at `index` links to, if it exists.
+fn parent_index(nodes: &[CompositeNode<'_>], index: usize) -> Option<usize> {
+    let link = nodes[index].1?;
 
-        while let Some(next) = parent_index(superstates, current) {
+    nodes.iter().position(|(handler, _)| *handler == link)
+}
+
+/// Report every cycle of `superstate` links between superstates and mounts,
+/// once per cycle.
+///
+/// Each node's chain of links is followed until it returns to the node, ends,
+/// or reaches a node visited before. A chain visits each node at most once, so
+/// the walk ends after at most as many steps as there are nodes. A cycle is
+/// reported only from its earliest member, superstates counting before mounts,
+/// at that member's link.
+fn check_superstate_cycles(
+    superstates: &[SuperstateModel],
+    mounts: &[MountModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let nodes = composite_nodes(superstates, mounts);
+
+    for (start, (_, start_link)) in nodes.iter().enumerate() {
+        let mut chain = vec![start];
+        let mut current = start;
+
+        while let Some(next) = parent_index(&nodes, current) {
             if next == start {
                 let is_earliest = chain.iter().all(|&member| member >= start);
 
-                if is_earliest && let Some(link) = &superstate.superstate {
+                if is_earliest && let Some(link) = start_link {
                     let names: Vec<String> = chain
                         .iter()
                         .chain([&start])
-                        .map(|&member| superstates[member].handler.to_string())
+                        .map(|&member| nodes[member].0.to_string())
                         .collect();
 
                     push_error(
@@ -981,7 +1214,7 @@ fn check_superstate_cycles(superstates: &[SuperstateModel], errors: &mut Option<
             }
 
             chain.push(next);
-            current = &superstates[next];
+            current = next;
         }
     }
 }
@@ -1024,6 +1257,55 @@ fn check_superstate_fields(
                         ),
                     );
                 }
+            }
+
+            link = superstate.superstate.as_ref();
+            steps += 1;
+        }
+    }
+}
+
+/// Report every superstate with local storage that contains a mount.
+///
+/// The local storage of a superstate binds by field name to every leaf below
+/// it, and the leaves below a mount are states of the mounted machine, which
+/// have no such fields. The walk up from a mount passes through any number of
+/// superstates and stops at the next mount, whose own walk reports the
+/// superstates above it, so each superstate is reported once per outermost
+/// mount it contains. The walk is bounded by the number of composite nodes, so
+/// a cycle of links does not prevent it from ending.
+fn check_superstate_storage(
+    superstates: &[SuperstateModel],
+    mounts: &[MountModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let limit = superstates.len() + mounts.len();
+
+    for mount in mounts {
+        let mut link = mount.superstate.as_ref();
+        let mut steps = 0;
+
+        while let Some(name) = link
+            && steps < limit
+        {
+            let Some(superstate) = superstates
+                .iter()
+                .find(|superstate| superstate.handler == *name)
+            else {
+                break;
+            };
+
+            if !superstate.fields.is_empty() {
+                push_error(
+                    errors,
+                    syn::Error::new_spanned(
+                        &superstate.handler,
+                        format!(
+                            "superstate `{}` has local storage but contains submachine `{}`",
+                            superstate.handler, mount.handler
+                        ),
+                    ),
+                );
             }
 
             link = superstate.superstate.as_ref();
@@ -1575,7 +1857,12 @@ mod tests {
 
         let mut errors = None;
 
-        check_duplicate_variants(&nodes.states, &nodes.superstates, &mut errors);
+        check_duplicate_variants(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
 
         assert_eq!(messages(errors), ["duplicate variant `Idle`"]);
     }
@@ -1783,7 +2070,7 @@ mod tests {
 
         let mut errors = None;
 
-        check_superstate_cycles(&nodes.superstates, &mut errors);
+        check_superstate_cycles(&nodes.superstates, &nodes.mounts, &mut errors);
 
         assert_eq!(messages(errors), ["superstate cycle detected: a -> b -> a"]);
     }
@@ -1821,6 +2108,319 @@ mod tests {
         assert_eq!(
             messages(errors),
             ["state `b` lacks field `counter` required by superstate `group`"]
+        );
+    }
+
+    #[test]
+    fn mount_is_modeled() {
+        let model = model(parse_quote! {
+            impl House {
+                /// Loads the door.
+                #[submachine(machine = door::Door, field = door, name = Loading, superstate = group)]
+                fn load(&mut self, event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let [mount] = model.mounts.as_slice() else {
+            panic!("the machine should have one mount");
+        };
+
+        let machine = &mount.machine;
+
+        assert_eq!(mount.handler, ident("load"));
+        assert_eq!(mount.variant, ident("Loading"));
+        assert_eq!(mount.constructor, ident("loading"));
+        assert_eq!(quote!(#machine).to_string(), "door :: Door");
+        assert_eq!(mount.field, ident("door"));
+        assert_eq!(mount.superstate, Some(ident("group")));
+        assert_eq!(mount.inputs, [InputKind::Receiver, InputKind::Event]);
+        assert_eq!(mount.docs.len(), 1);
+
+        let ImplItem::Fn(function) = &model.item.items[0] else {
+            panic!("the mount handler should stay a function");
+        };
+
+        assert!(
+            !function
+                .attrs
+                .iter()
+                .any(|attribute| attribute.path().is_ident("submachine"))
+        );
+
+        let (_, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl House {
+                    #[submachine(field = door)]
+                    fn untyped() -> Outcome<State> {
+                        Super
+                    }
+
+                    #[submachine(machine = door::Door)]
+                    fn unstored() -> Outcome<State> {
+                        Super
+                    }
+                }
+            },
+            &names(),
+        );
+
+        assert_eq!(
+            messages(errors),
+            [
+                "missing `machine = …`; name the submachine's type",
+                "missing `field = …`; name the field holding the submachine's storage",
+            ]
+        );
+    }
+
+    #[test]
+    fn submachine_input_is_classified() {
+        let model = model(parse_quote! {
+            impl House {
+                #[submachine(machine = door::Door, field = door)]
+                fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(
+            model.mounts[0].inputs,
+            [InputKind::Submachine, InputKind::Event]
+        );
+
+        let mut state: ImplItemFn = parse_quote! {
+            fn on(submachine: &mut u8) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let mut errors = None;
+        let inputs = handler_inputs(&mut state, Role::State, &names(), &mut None, &mut errors);
+
+        assert!(errors.is_none());
+        assert!(matches!(
+            inputs.as_slice(),
+            [InputKind::LocalStorage { name, .. }] if *name == "submachine"
+        ));
+    }
+
+    #[test]
+    fn mount_handler_local_storage_is_reported() {
+        let storing: ImplItemFn = parse_quote! {
+            fn loading(
+                &mut self,
+                submachine: &mut door::Door,
+                count: &mut u32,
+                event: &Event,
+                context: &mut Sink,
+                level: &u8,
+            ) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let plain: ImplItemFn = parse_quote! {
+            fn loading(
+                &mut self,
+                submachine: &mut door::Door,
+                event: &Event,
+                context: &mut Sink,
+            ) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut accepted = None;
+
+        check_mount_inputs(&plain, &names(), &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let mut errors = None;
+
+        check_mount_inputs(&storing, &names(), &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "submachine handlers can not take state-local storage",
+                "submachine handlers can not take state-local storage",
+            ]
+        );
+    }
+
+    #[test]
+    fn submachine_input_outside_mount_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on(event: &Event, submachine: &mut door::Door) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let superstate: ImplItemFn = parse_quote! {
+            fn group(submachine: &door::Door) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let action: ImplItemFn = parse_quote! {
+            fn prepare(&mut self, submachine: &mut door::Door) {}
+        };
+
+        let mount: ImplItemFn = parse_quote! {
+            fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut accepted = None;
+
+        check_submachine_input(&mount, Role::Submachine, &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let mut errors = None;
+
+        check_submachine_input(&state, Role::State, &mut errors);
+        check_submachine_input(&superstate, Role::Superstate, &mut errors);
+        check_submachine_input(&action, Role::Action, &mut errors);
+
+        let message = "`submachine` is only available on submachine handlers, their actions and \
+                       exit handlers";
+
+        assert_eq!(messages(errors), [message, message, message]);
+    }
+
+    #[test]
+    fn superstate_storage_over_mount_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl House {
+                #[submachine(machine = door::Door, field = door, superstate = inner)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, superstate = loading)]
+                fn nested() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = outer)]
+                fn inner() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = stored)]
+                fn outer(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn stored(count: &u32) -> Outcome<State> {
+                    Super
+                }
+
+                #[state(superstate = unrelated)]
+                fn on(count: &mut u32) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(local_storage(count: u32))]
+                fn unrelated() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_superstate_storage(&nodes.superstates, &nodes.mounts, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            ["superstate `stored` has local storage but contains submachine `loading`"]
+        );
+    }
+
+    #[test]
+    fn mounts_take_part_in_superstate_links() {
+        let model = model(parse_quote! {
+            impl House {
+                #[state(superstate = loading)]
+                fn on() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = door, superstate = group)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(model.states[0].superstate, Some(ident("loading")));
+        assert_eq!(model.mounts[0].superstate, Some(ident("group")));
+
+        let nodes = nodes(parse_quote! {
+            impl House {
+                #[state(name = Loading)]
+                fn waiting() -> Outcome<State> {
+                    Handled
+                }
+
+                #[submachine(machine = door::Door, field = door, superstate = group)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = loading)]
+                fn group() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, superstate = missing)]
+                fn spare() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_duplicate_variants(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
+        check_superstate_references(
+            &nodes.states,
+            &nodes.superstates,
+            &nodes.mounts,
+            &mut errors,
+        );
+        check_superstate_cycles(&nodes.superstates, &nodes.mounts, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "duplicate variant `Loading`",
+                "superstate not found",
+                "superstate cycle detected: group -> loading -> group",
+            ]
         );
     }
 
@@ -1908,6 +2508,7 @@ mod tests {
         check_links(
             &nodes.states,
             &nodes.superstates,
+            &nodes.mounts,
             &nodes.actions,
             &mut errors,
         );

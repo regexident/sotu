@@ -121,6 +121,18 @@ pub trait Submachine: Sized {
 )]
 pub trait BlockingSubmachine: Submachine + crate::blocking::IntoStateMachine {}
 
+/// Marker for generated machines that can not be left through an exit point.
+///
+/// Implemented for machines whose [`Submachine::Exit`] is
+/// [`core::convert::Infallible`]. A parent that mounts a child without an exit
+/// handler requires this trait of the child, since an exit it can not handle
+/// would otherwise go unhandled.
+#[diagnostic::on_unimplemented(
+    message = "submachine `{Self}` can exit",
+    note = "declare `exit_handler = …` on `#[submachine]`"
+)]
+pub trait ExitlessSubmachine: Submachine<Exit = core::convert::Infallible> {}
+
 /// A [`NodeOutcome`] together with the event it was produced for.
 ///
 /// Dispatch hooks take the event by value so that mount boundaries can move it
@@ -131,4 +143,100 @@ pub struct Dispatched<S, X, E> {
     pub outcome: NodeOutcome<S, X>,
     /// The event that was dispatched.
     pub event: E,
+}
+
+// MARK: Mount Fields
+
+/// Access to the parent field that stores a mounted submachine `C`.
+///
+/// The macro can not see a field's type, so it resolves the storage kind
+/// through this trait. A field of type `C` is persistent storage: the child
+/// keeps its value across activations of its mount node. A field of type
+/// `Option<C>` holds one instance per activation: it is `Some` exactly while
+/// its mount node is active and `None` otherwise.
+///
+/// The two implementations do not overlap even when `C` is itself an
+/// `Option`, because the trait parameter differs between them.
+#[diagnostic::on_unimplemented(
+    message = "field of type `{Self}` can not hold submachine `{C}`",
+    note = "a submachine field must have type `{C}` (persistent) or `Option<{C}>` (one instance per activation)"
+)]
+pub trait MountField<C> {
+    /// Borrow the stored submachine, or return `None` if the field holds no
+    /// instance.
+    ///
+    /// A persistent field always returns `Some`. An instance field returns
+    /// `Some` exactly while its mount node is active.
+    fn get(&self) -> Option<&C>;
+
+    /// Mutably borrow the stored submachine, or return `None` if the field
+    /// holds no instance.
+    ///
+    /// A persistent field always returns `Some`. An instance field returns
+    /// `Some` exactly while its mount node is active.
+    fn get_mut(&mut self) -> Option<&mut C>;
+
+    /// Release the stored submachine when its mount node is exited.
+    ///
+    /// An instance field drops its instance and becomes `None`, so it is
+    /// `None` whenever its mount node is inactive. A persistent field keeps
+    /// its value unchanged.
+    fn release(&mut self);
+}
+
+impl<C> MountField<C> for C {
+    fn get(&self) -> Option<&C> {
+        Some(self)
+    }
+
+    fn get_mut(&mut self) -> Option<&mut C> {
+        Some(self)
+    }
+
+    fn release(&mut self) {}
+}
+
+impl<C> MountField<C> for Option<C> {
+    fn get(&self) -> Option<&C> {
+        self.as_ref()
+    }
+
+    fn get_mut(&mut self) -> Option<&mut C> {
+        self.as_mut()
+    }
+
+    fn release(&mut self) {
+        *self = None;
+    }
+}
+
+/// Creation of a default submachine `C` in the parent field that stores it.
+///
+/// A mount node without a factory fills its field through this trait on
+/// entry, so that an instance field of type `Option<C>` is `Some` exactly
+/// while its mount node is active. Only instance fields require
+/// `C: Default`; a persistent field of type `C` already holds its child.
+#[diagnostic::on_unimplemented(
+    message = "`{C}` does not implement `Default`",
+    note = "declare `factory = …` on `#[submachine]` or store it in a field of type `{C}`"
+)]
+pub trait DefaultInstance<C> {
+    /// Store `C::default()` in an empty instance field when its mount node
+    /// is entered.
+    ///
+    /// An instance field that already holds an instance keeps it. A
+    /// persistent field keeps its value unchanged.
+    fn fill_default(&mut self);
+}
+
+impl<C> DefaultInstance<C> for C {
+    fn fill_default(&mut self) {}
+}
+
+impl<C: Default> DefaultInstance<C> for Option<C> {
+    fn fill_default(&mut self) {
+        if self.is_none() {
+            *self = Some(C::default());
+        }
+    }
 }

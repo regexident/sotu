@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod bare;
+pub mod trace;
 pub mod tree;
 
 /// Compile only when `$type` does not implement `$trait`.

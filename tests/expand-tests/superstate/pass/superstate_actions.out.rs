@@ -129,6 +129,7 @@ mod borrowing {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Heater {}
+    impl ::sotu::private::ExitlessSubmachine for Heater {}
 }
 mod field_less {
     use sotu::prelude::*;
@@ -259,6 +260,7 @@ mod field_less {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Fan {}
+    impl ::sotu::private::ExitlessSubmachine for Fan {}
 }
 fn main() {
     let mut heater = borrowing::Heater::default().state_machine();
