@@ -286,3 +286,105 @@ fn child_super_returns_event_to_mount_handler() {
         ]
     );
 }
+
+use test_strategy::{Arbitrary, proptest};
+
+mod counter {
+    use sotu::prelude::*;
+
+    #[derive(Default)]
+    pub struct Counter {
+        pub count: u32,
+    }
+
+    #[state_machine(initial = State::counting())]
+    impl Counter {
+        #[state]
+        fn counting(&mut self) -> Outcome<State> {
+            self.count += 1;
+
+            Handled
+        }
+    }
+}
+
+mod ticker {
+    use sotu::prelude::*;
+
+    use super::counter;
+
+    #[derive(Default)]
+    pub struct Ticker {
+        pub counter: Option<counter::Counter>,
+    }
+
+    #[state_machine(initial = Superstate::running())]
+    impl Ticker {
+        #[submachine(machine = counter::Counter, field = counter)]
+        fn running() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
+#[test]
+fn unit_child_receives_every_step() {
+    let mut machine = ticker::Ticker::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.step(&mut ());
+    machine.step(&mut ());
+    machine.step(&mut ());
+
+    assert_eq!(
+        machine.counter.as_ref().map(|counter| counter.count),
+        Some(3)
+    );
+}
+
+/// An event of `Dryer`, generated without the payload types having to
+/// implement `Arbitrary`.
+#[derive(Copy, Clone, Debug, Arbitrary)]
+enum DryerInput {
+    Start,
+    Tick,
+    Open,
+    Close,
+}
+
+impl DryerInput {
+    fn into_event(self) -> dryer::Event {
+        match self {
+            Self::Start => dryer::Event::Start(dryer::Start),
+            Self::Tick => dryer::Event::Tick(dryer::Tick),
+            Self::Open => dryer::Event::Open(door::Open),
+            Self::Close => dryer::Event::Close(door::Close),
+        }
+    }
+}
+
+/// The entries that the handlers of `door::Door` record.
+const DOOR_HANDLER_ENTRIES: [&str; 6] = [
+    "opened handled close",
+    "opened deferred open",
+    "closed handled open",
+    "closed deferred close",
+    "frame deferred open",
+    "frame deferred close",
+];
+
+#[proptest]
+fn addressing_matches_listed_types(input: DryerInput) {
+    let mut machine = loading_dryer();
+
+    machine.handle(input.into_event(), &mut ());
+
+    let entries = trace::take();
+    let reaches_child = entries
+        .iter()
+        .any(|entry| DOOR_HANDLER_ENTRIES.contains(entry));
+    let is_listed = matches!(input, DryerInput::Open | DryerInput::Close);
+
+    proptest::prop_assert_eq!(reaches_child, is_listed);
+}
