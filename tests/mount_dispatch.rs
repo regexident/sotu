@@ -155,3 +155,134 @@ fn listed_event_reaches_child_leaf() {
         washer::State::Loading(door::State::Opened {})
     ));
 }
+
+mod dryer {
+    use sotu::prelude::*;
+
+    use super::{door, trace};
+
+    #[derive(Default)]
+    pub struct Dryer {
+        pub door: Option<door::Door>,
+    }
+
+    pub struct Start;
+
+    pub struct Tick;
+
+    #[derive(Event)]
+    pub enum Event {
+        Start(Start),
+        Tick(Tick),
+        Open(door::Open),
+        Close(door::Close),
+    }
+
+    #[state_machine(
+        initial = State::idle(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after
+    )]
+    impl Dryer {
+        fn before(&mut self, node: StateOrSuperstate<'_, State, Superstate<'_>>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Idle {}) => "root before idle",
+                StateOrSuperstate::State(State::Loading(_)) => "root before leaf",
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Inner(_))) => {
+                    "root before child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Mount)) => {
+                    "root before loading"
+                }
+            });
+        }
+
+        fn after(&mut self, node: StateOrSuperstate<'_, State, Superstate<'_>>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Idle {}) => "root after idle",
+                StateOrSuperstate::State(State::Loading(_)) => "root after leaf",
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Inner(_))) => {
+                    "root after child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Mount)) => {
+                    "root after loading"
+                }
+            });
+        }
+
+        #[state]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Start(_) => Transition(Superstate::loading()),
+                _ => Handled,
+            }
+        }
+
+        #[submachine(machine = door::Door, field = door)]
+        fn loading(event: &Event) -> Outcome<State> {
+            trace::record(match event {
+                Event::Start(_) => "loading saw start",
+                Event::Tick(_) => "loading saw tick",
+                Event::Open(_) => "loading saw open",
+                Event::Close(_) => "loading saw close",
+            });
+
+            Handled
+        }
+    }
+}
+
+/// Return an initialized `Dryer` in `loading` with the child in `opened`,
+/// with an empty trace.
+fn loading_dryer() -> InitializedStateMachine<dryer::Dryer> {
+    let mut machine = dryer::Dryer::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.handle(dryer::Start, &mut ());
+    trace::take();
+
+    machine
+}
+
+#[test]
+fn unlisted_event_skips_child_without_hooks() {
+    let mut machine = loading_dryer();
+
+    machine.handle(dryer::Tick, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "root before loading",
+            "loading saw tick",
+            "root after loading"
+        ]
+    );
+    assert!(matches!(
+        machine.state(),
+        dryer::State::Loading(door::State::Opened {})
+    ));
+}
+
+#[test]
+fn child_super_returns_event_to_mount_handler() {
+    let mut machine = loading_dryer();
+
+    machine.handle(door::Open, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "root before leaf",
+            "opened deferred open",
+            "root after leaf",
+            "root before child superstate",
+            "frame deferred open",
+            "root after child superstate",
+            "root before loading",
+            "loading saw open",
+            "root after loading",
+        ]
+    );
+}
