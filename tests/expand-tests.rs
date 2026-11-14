@@ -59,6 +59,13 @@ mod submachine {
     pub fn pass() {
         tryexpand::expand(["tests/expand-tests/submachine/pass/**/*.rs"]).and_check();
     }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/submachine/fail/**/*.rs"])
+            .and_check()
+            .expect_fail();
+    }
 }
 
 mod action {
