@@ -581,6 +581,7 @@ fn check_signature(
     check_default_attributes(function, role, names, errors);
     check_input_patterns(function, errors);
     check_inputs_by_reference(function, role, names, errors);
+    check_submachine_input(function, role, errors);
 
     if role == Role::Submachine {
         check_mount_inputs(function, names, errors);
@@ -749,14 +750,47 @@ fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Op
     }
 }
 
+/// Report the `submachine` input of `function`, a handler or action of the kind `role`.
+///
+/// Only a mount has a submachine whose storage the input could borrow, so the
+/// input is rejected on every handler but a mount handler. Mounts declare no
+/// actions, so the input is rejected on every action. An input that is not a
+/// reference is left to [`check_inputs_by_reference`], so that it is reported
+/// once.
+fn check_submachine_input(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Error>) {
+    if role == Role::Submachine {
+        return;
+    }
+
+    let submachine = Ident::new("submachine", Span::call_site());
+
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        if is_named(typed, &submachine) && local_storage_input(typed).is_some() {
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    "`submachine` is only available on submachine handlers, their actions and \
+                     exit handlers",
+                ),
+            );
+        }
+    }
+}
+
 /// Classify the inputs of the handler `function` of the kind `role`.
 ///
 /// Only state handlers have `#[default]` attributes taken from their inputs, so
 /// on any other handler the attribute stays in place, where
 /// [`check_default_attributes`] reports it. Only a mount handler has a
 /// `submachine` input, so on any other handler an input of that name is local
-/// storage. Inputs that are not local storage are skipped, since
-/// [`check_input_patterns`] and [`check_inputs_by_reference`] report them.
+/// storage, which [`check_submachine_input`] reports. Inputs that are not local
+/// storage are skipped, since [`check_input_patterns`] and
+/// [`check_inputs_by_reference`] report them.
 fn handler_inputs(
     function: &mut ImplItemFn,
     role: Role,
@@ -2103,11 +2137,6 @@ mod tests {
                 fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
                     Super
                 }
-
-                #[state]
-                fn on(submachine: &mut u8) -> Outcome<State> {
-                    Handled
-                }
             }
         });
 
@@ -2115,8 +2144,19 @@ mod tests {
             model.mounts[0].inputs,
             [InputKind::Submachine, InputKind::Event]
         );
+
+        let mut state: ImplItemFn = parse_quote! {
+            fn on(submachine: &mut u8) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let mut errors = None;
+        let inputs = handler_inputs(&mut state, Role::State, &names(), &mut None, &mut errors);
+
+        assert!(errors.is_none());
         assert!(matches!(
-            model.states[0].inputs.as_slice(),
+            inputs.as_slice(),
             [InputKind::LocalStorage { name, .. }] if *name == "submachine"
         ));
     }
@@ -2164,6 +2204,48 @@ mod tests {
                 "submachine handlers can not take state-local storage",
             ]
         );
+    }
+
+    #[test]
+    fn submachine_input_outside_mount_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on(event: &Event, submachine: &mut door::Door) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let superstate: ImplItemFn = parse_quote! {
+            fn group(submachine: &door::Door) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let action: ImplItemFn = parse_quote! {
+            fn prepare(&mut self, submachine: &mut door::Door) {}
+        };
+
+        let mount: ImplItemFn = parse_quote! {
+            fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut accepted = None;
+
+        check_submachine_input(&mount, Role::Submachine, &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let mut errors = None;
+
+        check_submachine_input(&state, Role::State, &mut errors);
+        check_submachine_input(&superstate, Role::Superstate, &mut errors);
+        check_submachine_input(&action, Role::Action, &mut errors);
+
+        let message = "`submachine` is only available on submachine handlers, their actions and \
+                       exit handlers";
+
+        assert_eq!(messages(errors), [message, message, message]);
     }
 
     #[test]
