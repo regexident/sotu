@@ -1,0 +1,6 @@
+error: submachine handlers can not take state-local storage
+  --> /tests/expand-tests/submachine/fail/handler_with_local_storage.rs:31:16
+   |
+31 |     fn loading(attempts: &mut u32) -> Outcome<State> {
+   |                ^^^^^^^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error

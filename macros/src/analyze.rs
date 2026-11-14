@@ -581,6 +581,10 @@ fn check_signature(
     check_default_attributes(function, role, names, errors);
     check_input_patterns(function, errors);
     check_inputs_by_reference(function, role, names, errors);
+
+    if role == Role::Submachine {
+        check_mount_inputs(function, names, errors);
+    }
 }
 
 /// Report generic parameters declared by `function`.
@@ -708,6 +712,38 @@ fn check_inputs_by_reference(
             push_error(
                 errors,
                 syn::Error::new_spanned(&typed.ty, "input must be passed as a reference"),
+            );
+        }
+    }
+}
+
+/// Report every local storage input of the mount handler `function`.
+///
+/// A mount's leaves are states of the mounted machine, which have no fields of
+/// the parent to lend, so a mount handler can only take the receiver, the
+/// event, the context and the `submachine` input. Inputs that are not
+/// references are left to [`check_inputs_by_reference`], so that each input is
+/// reported once.
+fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Option<syn::Error>) {
+    let submachine = Ident::new("submachine", Span::call_site());
+
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        let is_local_storage = local_storage_input(typed).is_some()
+            && !is_named(typed, &names.event)
+            && !is_named(typed, &names.context)
+            && !is_named(typed, &submachine);
+
+        if is_local_storage {
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    "submachine handlers can not take state-local storage",
+                ),
             );
         }
     }
@@ -2083,6 +2119,51 @@ mod tests {
             model.states[0].inputs.as_slice(),
             [InputKind::LocalStorage { name, .. }] if *name == "submachine"
         ));
+    }
+
+    #[test]
+    fn mount_handler_local_storage_is_reported() {
+        let storing: ImplItemFn = parse_quote! {
+            fn loading(
+                &mut self,
+                submachine: &mut door::Door,
+                count: &mut u32,
+                event: &Event,
+                context: &mut Sink,
+                level: &u8,
+            ) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let plain: ImplItemFn = parse_quote! {
+            fn loading(
+                &mut self,
+                submachine: &mut door::Door,
+                event: &Event,
+                context: &mut Sink,
+            ) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mut accepted = None;
+
+        check_mount_inputs(&plain, &names(), &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let mut errors = None;
+
+        check_mount_inputs(&storing, &names(), &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            [
+                "submachine handlers can not take state-local storage",
+                "submachine handlers can not take state-local storage",
+            ]
+        );
     }
 
     #[test]
