@@ -1123,8 +1123,9 @@ fn event_referent(typed: &PatType) -> syn::Result<&Type> {
     }
 }
 
-/// Report every link that does not resolve, superstate cycles, and states
-/// lacking a field that a superstate above them borrows.
+/// Report every link that does not resolve, superstate cycles, states lacking a
+/// field that a superstate above them borrows, and superstates with local
+/// storage that contain a mount.
 fn check_links(
     states: &[StateModel],
     superstates: &[SuperstateModel],
@@ -1136,6 +1137,7 @@ fn check_links(
     check_superstate_references(states, superstates, mounts, errors);
     check_superstate_cycles(superstates, mounts, errors);
     check_superstate_fields(states, superstates, errors);
+    check_superstate_storage(superstates, mounts, errors);
 }
 
 /// A node that other nodes can sit in: its handler name and its own
@@ -1255,6 +1257,55 @@ fn check_superstate_fields(
                         ),
                     );
                 }
+            }
+
+            link = superstate.superstate.as_ref();
+            steps += 1;
+        }
+    }
+}
+
+/// Report every superstate with local storage that contains a mount.
+///
+/// The local storage of a superstate binds by field name to every leaf below
+/// it, and the leaves below a mount are states of the mounted machine, which
+/// have no such fields. The walk up from a mount passes through any number of
+/// superstates and stops at the next mount, whose own walk reports the
+/// superstates above it, so each superstate is reported once per outermost
+/// mount it contains. The walk is bounded by the number of composite nodes, so
+/// a cycle of links does not prevent it from ending.
+fn check_superstate_storage(
+    superstates: &[SuperstateModel],
+    mounts: &[MountModel],
+    errors: &mut Option<syn::Error>,
+) {
+    let limit = superstates.len() + mounts.len();
+
+    for mount in mounts {
+        let mut link = mount.superstate.as_ref();
+        let mut steps = 0;
+
+        while let Some(name) = link
+            && steps < limit
+        {
+            let Some(superstate) = superstates
+                .iter()
+                .find(|superstate| superstate.handler == *name)
+            else {
+                break;
+            };
+
+            if !superstate.fields.is_empty() {
+                push_error(
+                    errors,
+                    syn::Error::new_spanned(
+                        &superstate.handler,
+                        format!(
+                            "superstate `{}` has local storage but contains submachine `{}`",
+                            superstate.handler, mount.handler
+                        ),
+                    ),
+                );
             }
 
             link = superstate.superstate.as_ref();
@@ -2246,6 +2297,57 @@ mod tests {
                        exit handlers";
 
         assert_eq!(messages(errors), [message, message, message]);
+    }
+
+    #[test]
+    fn superstate_storage_over_mount_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl House {
+                #[submachine(machine = door::Door, field = door, superstate = inner)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, superstate = loading)]
+                fn nested() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = outer)]
+                fn inner() -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(superstate = stored)]
+                fn outer(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate]
+                fn stored(count: &u32) -> Outcome<State> {
+                    Super
+                }
+
+                #[state(superstate = unrelated)]
+                fn on(count: &mut u32) -> Outcome<State> {
+                    Super
+                }
+
+                #[superstate(local_storage(count: u32))]
+                fn unrelated() -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_superstate_storage(&nodes.superstates, &nodes.mounts, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            ["superstate `stored` has local storage but contains submachine `loading`"]
+        );
     }
 
     #[test]

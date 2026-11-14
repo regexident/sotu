@@ -1,0 +1,6 @@
+error: superstate `powered` has local storage but contains submachine `loading`
+  --> /tests/expand-tests/submachine/fail/superstate_storage_contains_mount.rs:41:8
+   |
+41 |     fn powered(attempts: &mut u32) -> Outcome<State> {
+   |        ^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
