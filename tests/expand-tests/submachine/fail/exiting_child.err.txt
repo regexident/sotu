@@ -1,0 +1,73 @@
+error[E0277]: submachine `Door` can exit
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:27:1
+   |
+27 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ExitlessSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:11:5
+   |
+11 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: declare `exit_handler = …` on `#[submachine]`
+   = help: the trait `ExitlessSubmachine` is implemented for `House`
+note: required for `State` to implement `sotu::blocking::State<House>`
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:27:1
+   |
+27 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+34 |     #[submachine(machine = door::Door, field = door)]
+   |                            ---- unsatisfied trait bound introduced here
+note: required by a bound in `sotu::blocking::IntoStateMachine::State`
+  --> /src/blocking/into_state_machine.rs:31:17
+   |
+31 |     type State: State<Self>;
+   |                 ^^^^^^^^^^^ required by this bound in `IntoStateMachine::State`
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: submachine `Door` can exit
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:27:1
+   |
+27 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ExitlessSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:11:5
+   |
+11 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: declare `exit_handler = …` on `#[submachine]`
+   = help: the trait `ExitlessSubmachine` is implemented for `House`
+note: required for `Superstate<'sub>` to implement `sotu::blocking::Superstate<House>`
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:27:1
+   |
+27 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+34 |     #[submachine(machine = door::Door, field = door)]
+   |                            ---- unsatisfied trait bound introduced here
+note: required by a bound in `sotu::blocking::IntoStateMachine::Superstate`
+  --> /src/blocking/into_state_machine.rs:38:28
+   |
+38 |     type Superstate<'sub>: Superstate<Self>
+   |                            ^^^^^^^^^^^^^^^^ required by this bound in `IntoStateMachine::Superstate`
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: submachine `Door` can exit
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:34:28
+   |
+34 |     #[submachine(machine = door::Door, field = door)]
+   |                            ^^^^ unsatisfied trait bound
+   |
+help: the trait `ExitlessSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/submachine/fail/exiting_child.rs:11:5
+   |
+11 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: declare `exit_handler = …` on `#[submachine]`
+   = help: the trait `ExitlessSubmachine` is implemented for `House`
+   = help: see issue #48214
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `<CRATE>` (bin "<BIN>") due to 4 previous errors
