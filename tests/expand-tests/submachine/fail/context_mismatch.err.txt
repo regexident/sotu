@@ -71,4 +71,4 @@ note: method defined here
    = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 For more information about this error, try `rustc --explain E0308`.
-error: could not compile `<CRATE>` (bin "<BIN>") due to 4 previous errors
+error: could not compile `<CRATE>` (bin "<BIN>") due to <N> previous errors
