@@ -87,6 +87,7 @@ mod mixed {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Mixed {}
+    impl ::sotu::private::ExitlessSubmachine for Mixed {}
 }
 mod stateless {
     use sotu::prelude::*;
@@ -147,6 +148,7 @@ mod stateless {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Stateless {}
+    impl ::sotu::private::ExitlessSubmachine for Stateless {}
 }
 fn main() {
     let mut mixed = mixed::Mixed::default().state_machine();

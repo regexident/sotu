@@ -195,6 +195,11 @@ where
     T: Copy,
     U: Default,
 {}
+impl<T, U, const N: usize> ::sotu::private::ExitlessSubmachine for Shelf<T, U, N>
+where
+    T: Copy,
+    U: Default,
+{}
 fn main() {
     let mut machine = Shelf::<u8, String, 2> {
         label: String::new(),

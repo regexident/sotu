@@ -55,6 +55,7 @@ impl<'a> ::sotu::private::Submachine for Tagger<'a> {
     }
 }
 impl<'a> ::sotu::private::BlockingSubmachine for Tagger<'a> {}
+impl<'a> ::sotu::private::ExitlessSubmachine for Tagger<'a> {}
 fn main() {
     let tag = String::from("tag");
     let mut lines = Vec::new();

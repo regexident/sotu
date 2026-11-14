@@ -105,6 +105,7 @@ mod entry_only {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Lamp {}
+    impl ::sotu::private::ExitlessSubmachine for Lamp {}
 }
 mod exit_only {
     use sotu::prelude::*;
@@ -196,6 +197,7 @@ mod exit_only {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Latch {}
+    impl ::sotu::private::ExitlessSubmachine for Latch {}
 }
 fn main() {
     let mut lamp = entry_only::Lamp::default().state_machine();

@@ -90,6 +90,7 @@ impl ::sotu::private::Submachine for Counter {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Counter {}
+impl ::sotu::private::ExitlessSubmachine for Counter {}
 fn main() {
     let mut machine = Counter.state_machine();
     machine.step(&mut ());

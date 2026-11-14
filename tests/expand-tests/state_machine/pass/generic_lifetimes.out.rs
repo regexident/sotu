@@ -163,6 +163,7 @@ impl<'a, 'b: 'a> ::sotu::private::Submachine for Reader<'a, 'b> {
     }
 }
 impl<'a, 'b: 'a> ::sotu::private::BlockingSubmachine for Reader<'a, 'b> {}
+impl<'a, 'b: 'a> ::sotu::private::ExitlessSubmachine for Reader<'a, 'b> {}
 fn main() {
     let prefix = String::from("#");
     let text = String::from("first\n#second");

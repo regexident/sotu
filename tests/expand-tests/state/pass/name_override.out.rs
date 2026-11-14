@@ -64,6 +64,7 @@ impl ::sotu::private::Submachine for Gate {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Gate {}
+impl ::sotu::private::ExitlessSubmachine for Gate {}
 fn main() {
     let mut machine = Gate.state_machine();
     machine.step(&mut ());

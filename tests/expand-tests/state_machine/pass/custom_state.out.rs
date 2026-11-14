@@ -47,6 +47,7 @@ impl ::sotu::private::Submachine for Lamp {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Lamp {}
+impl ::sotu::private::ExitlessSubmachine for Lamp {}
 fn main() {
     let mut machine = Lamp.state_machine();
     machine.step(&mut ());

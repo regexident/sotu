@@ -167,6 +167,7 @@ impl ::sotu::private::Submachine for Switch {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Switch {}
+impl ::sotu::private::ExitlessSubmachine for Switch {}
 fn main() {
     let mut machine = Switch::default().state_machine();
     machine.handle(Flip, &mut ());
