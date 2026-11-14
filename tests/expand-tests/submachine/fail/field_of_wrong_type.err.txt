@@ -1,0 +1,26 @@
+error[E0277]: field of type `u32` can not hold submachine `Door`
+  --> /tests/expand-tests/submachine/fail/field_of_wrong_type.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `MountField<Door>` is not implemented for `u32`
+...
+30 |     #[submachine(machine = door::Door, field = door)]
+   |                                                ---- required by a bound introduced by this call
+   |
+   = note: a submachine field must have type `Door` (persistent) or `Option<Door>` (one instance per activation)
+   = help: the trait `MountField<C>` is implemented for `Option<C>`
+
+error[E0277]: `Door` does not implement `Default`
+  --> /tests/expand-tests/submachine/fail/field_of_wrong_type.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `DefaultInstance<Door>` is not implemented for `u32`
+...
+30 |     #[submachine(machine = door::Door, field = door)]
+   |                                                ---- required by a bound introduced by this call
+   |
+   = note: declare `factory = …` on `#[submachine]` or store it in a field of type `Door`
+   = help: the trait `DefaultInstance<C>` is implemented for `Option<C>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `<CRATE>` (bin "<BIN>") due to 5 previous errors
