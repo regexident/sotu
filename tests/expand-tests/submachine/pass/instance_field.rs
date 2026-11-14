@@ -8,11 +8,15 @@ mod door {
         pub openings: u32,
     }
 
+    /// The door lists no events, so it can be mounted under any parent.
+    #[derive(Event)]
+    pub enum Event {}
+
     #[state_machine(initial = State::opened())]
     impl Door {
         #[state(entry_action = count)]
-        fn opened() -> Outcome<State> {
-            Handled
+        fn opened(event: &Event) -> Outcome<State> {
+            match *event {}
         }
 
         #[action]
