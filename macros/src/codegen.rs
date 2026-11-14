@@ -41,6 +41,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         .map(|superstate| superstate_dispatch_impl(superstate, mounts));
 
     let submachine = submachine_impls(&ir.machine);
+    let projection = projection_impl(&ir.machine, mounts);
 
     quote! {
         #item
@@ -56,6 +57,8 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         #superstate_dispatch
 
         #submachine
+
+        #projection
     }
 }
 
@@ -484,8 +487,8 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
     let name = &state.name;
     let state = state_type(state);
 
-    // Events reach the child's states only through the mount node, so a mount
-    // variant defers every event to its superstates.
+    // Dispatch reaches the child's states through `__dispatch`, which projects
+    // the event into the child, so `call_handler` of a mount variant only defers.
     let mount_arms = mounts.iter().map(|mount| {
         let variant = &mount.variant;
 
@@ -534,6 +537,7 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
     });
 
     let same_state = (!mounts.is_empty()).then(|| state_same_state_method(name, dispatch, mounts));
+    let boundary = (!mounts.is_empty()).then(|| state_boundary_methods(dispatch, mounts));
     let generics = with_mount_bounds(generics, mounts);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
@@ -557,6 +561,8 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
             #parents
 
             #same_state
+
+            #boundary
         }
     }
 }
@@ -760,6 +766,8 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
     let different_variants =
         (variants.len() > 1 || !mounts.is_empty()).then(|| quote!(_ => false,));
 
+    let boundary = (!mounts.is_empty()).then(|| superstate_boundary_methods(superstate, mounts));
+
     quote! {
         impl #impl_generics ::sotu::blocking::Superstate<#shared_storage> for #declared
         #where_clause
@@ -788,14 +796,17 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
                     #different_variants
                 }
             }
+
+            #boundary
         }
     }
 }
 
 /// Generate the arms of `Superstate::call_handler` for `mount`.
 ///
-/// The child's superstates defer every event, since events reach the child
-/// only through the mount node, and the mount node calls the mount handler.
+/// The child's superstates defer every event, since dispatch reaches them
+/// through `__dispatch`, which projects the event into the child, and the
+/// mount node calls the mount handler.
 fn mount_handler_arms(
     enum_name: &Ident,
     shared_storage: &Type,
@@ -1165,4 +1176,359 @@ fn field_call(mount: &MountIr, trait_name: &str, method: &str) -> TokenStream {
     quote_spanned! {field.span()=>
         ::sotu::private::#trait_name::<#machine>::#method(&mut #shared_storage.#field)
     }
+}
+
+// MARK: Mount Boundary
+
+/// Generate the hidden associated functions of the shared storage that move a
+/// parent event across each mount boundary, or nothing without mounts.
+///
+/// Each function checks `accepts`, projects the event into the child's event
+/// type, hands it to `visit` and embeds the event that `visit` returns. A
+/// parent event the child does not accept, or one whose projection fails, is
+/// returned unchanged as `Err`. Keeping every use of `SubEvent` for a mount in
+/// this one body reports a child event type that the parent does not list
+/// exactly once, at the value of the `machine` key.
+fn projection_impl(machine: &MachineIr, mounts: &[MountIr]) -> Option<TokenStream> {
+    if mounts.is_empty() {
+        return None;
+    }
+
+    let shared_storage = &machine.shared_storage;
+    let event_type = &machine.event_type;
+    let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
+    let event = generated_ident("event");
+    let visit = generated_ident("visit");
+
+    let functions = mounts.iter().map(|mount| {
+        let MountIr {
+            machine: child,
+            projection,
+            ..
+        } = mount;
+
+        let child_event = quote!(<#child as ::sotu::private::Submachine>::Event);
+
+        let sub_event = quote_spanned! {child.span()=>
+            <<#child as ::sotu::private::Submachine>::Event as ::sotu::event::SubEvent<#event_type>>
+        };
+
+        // A child whose event enum has no variants has an uninhabited event
+        // type, so the code after the visit is unreachable.
+        quote! {
+            #[doc(hidden)]
+            #[allow(unreachable_code)]
+            fn #projection<Visited>(
+                #event: #event_type,
+                #visit: impl ::core::ops::FnOnce(#child_event) -> (Visited, #child_event),
+            ) -> ::core::result::Result<(Visited, #event_type), #event_type> {
+                if !#sub_event::accepts(&#event) {
+                    return ::core::result::Result::Err(#event);
+                }
+
+                match #sub_event::project(#event) {
+                    ::core::result::Result::Ok(child_event) => {
+                        let (visited, child_event) = #visit(child_event);
+
+                        ::core::result::Result::Ok((visited, #sub_event::embed(child_event)))
+                    }
+                    ::core::result::Result::Err(#event) => ::core::result::Result::Err(#event),
+                }
+            }
+        }
+    });
+
+    Some(quote! {
+        impl #impl_generics #shared_storage #where_clause {
+            #(#functions)*
+        }
+    })
+}
+
+/// Generate the expression that lifts `outcome`, a `NodeOutcome` of the child
+/// of `mount`, into the parent's terms.
+///
+/// Targets are wrapped in the mount's state variant and offsets are kept,
+/// because they count levels above the visited node, which is the same node in
+/// both machines. The child is exitless, so its exit type is uninhabited.
+fn lifted_outcome(state_name: &Ident, mount: &MountIr, outcome: &Ident) -> TokenStream {
+    let variant = &mount.variant;
+
+    quote! {
+        match #outcome {
+            ::sotu::private::NodeOutcome::Handled => ::sotu::private::NodeOutcome::Handled,
+            ::sotu::private::NodeOutcome::Super => ::sotu::private::NodeOutcome::Super,
+            ::sotu::private::NodeOutcome::Transition(target) => {
+                ::sotu::private::NodeOutcome::Transition(#state_name::#variant(target))
+            }
+            ::sotu::private::NodeOutcome::ExternalTransition {
+                target,
+                handler_offset,
+            } => ::sotu::private::NodeOutcome::ExternalTransition {
+                target: #state_name::#variant(target),
+                handler_offset,
+            },
+            ::sotu::private::NodeOutcome::Exit(exit) => match exit {},
+            ::sotu::private::NodeOutcome::DeferToMount { mount_offset } => {
+                ::sotu::private::NodeOutcome::DeferToMount { mount_offset }
+            }
+        }
+    }
+}
+
+/// The parts of a node enum's trait impl that the boundary methods read.
+struct BoundaryContext<'ir> {
+    /// The name of the node enum whose impl receives the methods.
+    enum_name: &'ir Ident,
+    /// The name of the state enum, whose mount variants wrap lifted targets.
+    state_name: &'ir Ident,
+    shared_storage: &'ir Type,
+    event_type: &'ir Type,
+    context_type: &'ir Type,
+    exit_type: &'ir Type,
+    /// The type `Dispatched` carries as the target of transitions.
+    target_type: TokenStream,
+    /// The trait whose `call_handler` handles the variants without a child.
+    node_trait: TokenStream,
+}
+
+/// Generate the arm of `__is_addressed` for a child node bound as `node`.
+///
+/// The child node is addressed exactly when the child accepts the event and
+/// the child node itself reports it as addressed.
+fn addressed_arm(
+    context: &BoundaryContext<'_>,
+    mount: &MountIr,
+    pattern: &TokenStream,
+    child_trait: &TokenStream,
+) -> TokenStream {
+    let storage = expression_path(context.shared_storage);
+    let projection = &mount.projection;
+    let event = generated_ident("event");
+
+    quote! {
+        #pattern => match #storage::#projection(#event, |#event| {
+            #child_trait::__is_addressed(node, #event)
+        }) {
+            ::core::result::Result::Ok(addressed) => addressed,
+            ::core::result::Result::Err(#event) => (false, #event),
+        },
+    }
+}
+
+/// Generate the arm of `__dispatch` for a child node bound as `node`.
+///
+/// The child node is dispatched on the child's storage with the projected
+/// event, and its outcome is lifted. Without an instance, or when the
+/// projection fails, the remaining child nodes are skipped by deferring to the
+/// mount node, which sits as many levels above `node` as `node` is deep inside
+/// the child.
+fn dispatch_arm_into_child(
+    context: &BoundaryContext<'_>,
+    mount: &MountIr,
+    pattern: &TokenStream,
+    child_trait: &TokenStream,
+    child_extension: &TokenStream,
+) -> TokenStream {
+    let storage = expression_path(context.shared_storage);
+    let projection = &mount.projection;
+    let machine = &mount.machine;
+    let field = &mount.field;
+    let shared_storage = generated_ident("shared_storage");
+    let event = generated_ident("event");
+    let ctx = generated_ident("context");
+    let submachine = generated_ident("submachine");
+    let outcome = generated_ident("outcome");
+    let lifted = lifted_outcome(context.state_name, mount, &outcome);
+
+    let storage_access = quote_spanned! {field.span()=>
+        ::sotu::private::MountField::<#machine>::get_mut(&mut #shared_storage.#field)
+    };
+
+    quote! {
+        #pattern => {
+            let mount_offset = #child_extension::depth(node);
+
+            let ::core::option::Option::Some(#submachine) = #storage_access else {
+                return ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::DeferToMount { mount_offset },
+                    event: #event,
+                };
+            };
+
+            let visited = #storage::#projection(#event, |#event| {
+                let ::sotu::private::Dispatched { outcome, event } =
+                    #child_trait::__dispatch(node, #submachine, #event, #ctx);
+
+                (outcome, event)
+            });
+
+            match visited {
+                ::core::result::Result::Ok((#outcome, #event)) => ::sotu::private::Dispatched {
+                    outcome: #lifted,
+                    event: #event,
+                },
+                ::core::result::Result::Err(#event) => ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::DeferToMount { mount_offset },
+                    event: #event,
+                },
+            }
+        }
+    }
+}
+
+/// Generate `__is_addressed` and `__dispatch` of a node enum whose child
+/// nodes are matched by `child_arms`, pairs of an `__is_addressed` arm and a
+/// `__dispatch` arm.
+///
+/// Every other variant is addressed and dispatched as the trait's defaults
+/// do. `has_other_variants` tells whether such a variant exists, since a
+/// wildcard arm without one would be reported as unreachable in the user's
+/// crate.
+fn boundary_methods(
+    context: &BoundaryContext<'_>,
+    child_arms: Vec<(TokenStream, TokenStream)>,
+    has_other_variants: bool,
+) -> TokenStream {
+    let BoundaryContext {
+        shared_storage,
+        event_type,
+        context_type,
+        exit_type,
+        target_type,
+        node_trait,
+        ..
+    } = context;
+
+    let shared_storage_parameter = generated_ident("shared_storage");
+    let event = generated_ident("event");
+    let ctx = generated_ident("context");
+    let (addressed_arms, dispatch_arms): (Vec<_>, Vec<_>) = child_arms.into_iter().unzip();
+
+    let other_addressed = has_other_variants.then(|| quote!(_ => (true, #event),));
+
+    let other_dispatched = has_other_variants.then(|| {
+        quote! {
+            _ => {
+                let outcome = #node_trait::call_handler(
+                    self,
+                    #shared_storage_parameter,
+                    &#event,
+                    #ctx,
+                );
+
+                ::sotu::private::Dispatched {
+                    outcome: ::sotu::private::NodeOutcome::from(outcome),
+                    event: #event,
+                }
+            }
+        }
+    });
+
+    // A child whose event enum has no variants has an uninhabited event type,
+    // so the code after its dispatch is unreachable.
+    quote! {
+        fn __is_addressed(&self, #event: #event_type) -> (bool, #event_type) {
+            match self {
+                #(#addressed_arms)*
+                #other_addressed
+            }
+        }
+
+        #[allow(unreachable_code)]
+        fn __dispatch<'ctx, 'data: 'ctx>(
+            &mut self,
+            #shared_storage_parameter: &mut #shared_storage,
+            #event: #event_type,
+            #ctx: &mut #context_type,
+        ) -> ::sotu::private::Dispatched<#target_type, #exit_type, #event_type> {
+            match self {
+                #(#dispatch_arms)*
+                #other_dispatched
+            }
+        }
+    }
+}
+
+/// Generate `__is_addressed` and `__dispatch` of the state enum, which visit
+/// the child's leaf state inside each mount variant.
+fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
+    let name = &dispatch.state.name;
+    let shared_storage = &dispatch.shared_storage;
+
+    let context = BoundaryContext {
+        enum_name: name,
+        state_name: name,
+        shared_storage,
+        event_type: &dispatch.event_type,
+        context_type: &dispatch.context_type,
+        exit_type: &dispatch.exit_type,
+        target_type: quote!(Self),
+        node_trait: quote!(::sotu::blocking::State::<#shared_storage>),
+    };
+
+    let child_arms = mounts
+        .iter()
+        .map(|mount| {
+            let enum_name = context.enum_name;
+            let variant = &mount.variant;
+            let machine = &mount.machine;
+            let pattern = quote!(#enum_name::#variant(node));
+            let child_trait = child_state_trait(machine);
+
+            let child_extension = quote! {
+                <<#machine as ::sotu::blocking::IntoStateMachine>::State
+                    as ::sotu::blocking::StateExt<#machine>>
+            };
+
+            (
+                addressed_arm(&context, mount, &pattern, &child_trait),
+                dispatch_arm_into_child(&context, mount, &pattern, &child_trait, &child_extension),
+            )
+        })
+        .collect();
+
+    boundary_methods(&context, child_arms, !dispatch.arms.is_empty())
+}
+
+/// Generate `__is_addressed` and `__dispatch` of the superstate enum, which
+/// visit the child's superstate inside each mount variant. The mount node
+/// itself is handled by the mount handler like any other superstate.
+fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream {
+    let shared_storage = &superstate.shared_storage;
+
+    let context = BoundaryContext {
+        enum_name: &superstate.ty.name,
+        state_name: &superstate.state.name,
+        shared_storage,
+        event_type: &superstate.event_type,
+        context_type: &superstate.context_type,
+        exit_type: &superstate.exit_type,
+        target_type: state_type(&superstate.state),
+        node_trait: quote!(::sotu::blocking::Superstate::<#shared_storage>),
+    };
+
+    let child_arms = mounts
+        .iter()
+        .map(|mount| {
+            let enum_name = context.enum_name;
+            let variant = &mount.variant;
+            let machine = &mount.machine;
+            let pattern = quote!(#enum_name::#variant(::sotu::SubmachineNode::Inner(node)));
+            let child_trait = child_superstate_trait(machine);
+
+            let child_extension = quote! {
+                <<#machine as ::sotu::blocking::IntoStateMachine>::Superstate<'_>
+                    as ::sotu::blocking::SuperstateExt<#machine>>
+            };
+
+            (
+                addressed_arm(&context, mount, &pattern, &child_trait),
+                dispatch_arm_into_child(&context, mount, &pattern, &child_trait, &child_extension),
+            )
+        })
+        .collect();
+
+    // The mount node of every mount is a variant without a child node.
+    boundary_methods(&context, child_arms, true)
 }
