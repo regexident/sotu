@@ -1,0 +1,6 @@
+error: `submachine` is only available on submachine handlers, their actions and exit handlers
+  --> /tests/expand-tests/submachine/fail/submachine_outside_mount.rs:28:13
+   |
+28 |     fn idle(submachine: &mut door::Door) -> Outcome<State> {
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
