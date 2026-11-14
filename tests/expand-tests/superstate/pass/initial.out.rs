@@ -113,6 +113,7 @@ mod borrowing {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Blinker {}
+    impl ::sotu::private::ExitlessSubmachine for Blinker {}
 }
 mod field_less {
     use sotu::prelude::*;
@@ -208,6 +209,7 @@ mod field_less {
         }
     }
     impl ::sotu::private::BlockingSubmachine for Lamp {}
+    impl ::sotu::private::ExitlessSubmachine for Lamp {}
 }
 fn main() {
     let mut blinker = borrowing::Blinker.state_machine();

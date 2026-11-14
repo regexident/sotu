@@ -108,6 +108,7 @@ impl ::sotu::private::Submachine for Linked {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Linked {}
+impl ::sotu::private::ExitlessSubmachine for Linked {}
 fn main() {
     let mut machine = Linked.state_machine();
     machine.handle(Event::Next, &mut ());

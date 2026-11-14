@@ -150,6 +150,7 @@ impl ::sotu::private::Submachine for Gauge {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Gauge {}
+impl ::sotu::private::ExitlessSubmachine for Gauge {}
 fn main() {
     let mut machine = Gauge::default().state_machine();
     machine.handle(Event::Next, &mut ());

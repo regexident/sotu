@@ -126,6 +126,7 @@ impl ::sotu::private::Submachine for Tracer {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Tracer {}
+impl ::sotu::private::ExitlessSubmachine for Tracer {}
 fn main() {
     let mut lines = Vec::new();
     let mut sink = Sink { output: &mut lines };

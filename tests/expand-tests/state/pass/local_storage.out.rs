@@ -104,6 +104,7 @@ impl ::sotu::private::Submachine for Meter {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Meter {}
+impl ::sotu::private::ExitlessSubmachine for Meter {}
 fn main() {
     let mut machine = Meter::default().state_machine();
     machine.handle(Event::Next, &mut ());

@@ -122,6 +122,7 @@ impl ::sotu::private::Submachine for Hierarchy {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Hierarchy {}
+impl ::sotu::private::ExitlessSubmachine for Hierarchy {}
 fn main() {
     let mut machine = Hierarchy.state_machine();
     machine.handle(Event::Next, &mut ());

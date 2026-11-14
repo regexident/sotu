@@ -62,6 +62,7 @@ impl ::sotu::private::Submachine for Writer {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Writer {}
+impl ::sotu::private::ExitlessSubmachine for Writer {}
 fn main() {
     let mut lines = Vec::new();
     let mut sink = Sink { output: &mut lines };

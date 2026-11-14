@@ -58,6 +58,7 @@ impl ::sotu::private::Submachine for Ticker {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Ticker {}
+impl ::sotu::private::ExitlessSubmachine for Ticker {}
 fn main() {
     let mut machine = Ticker::default().state_machine();
     machine.step(&mut ());

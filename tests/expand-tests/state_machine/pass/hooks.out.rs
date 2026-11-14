@@ -124,6 +124,7 @@ impl ::sotu::private::Submachine for Tracer {
     }
 }
 impl ::sotu::private::BlockingSubmachine for Tracer {}
+impl ::sotu::private::ExitlessSubmachine for Tracer {}
 fn main() {
     let mut machine = Tracer { trace: Vec::new() }.state_machine();
     machine.step(&mut ());
