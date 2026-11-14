@@ -62,8 +62,12 @@ mod submachine {
 
     #[test]
     pub fn fail() {
+        // The number of errors that cargo reports for the submachine bounds
+        // includes duplicates that rustc suppresses, and how many of those
+        // it counts differs between host platforms.
         tryexpand::expand(["tests/expand-tests/submachine/fail/**/*.rs"])
             .and_check()
+            .filter_stderr(r"due to \d+ previous errors", "due to <N> previous errors")
             .expect_fail();
     }
 }

@@ -23,4 +23,4 @@ error[E0277]: `Door` does not implement `Default`
    = help: the trait `DefaultInstance<C>` is implemented for `Option<C>`
 
 For more information about this error, try `rustc --explain E0277`.
-error: could not compile `<CRATE>` (bin "<BIN>") due to 5 previous errors
+error: could not compile `<CRATE>` (bin "<BIN>") due to <N> previous errors
