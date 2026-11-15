@@ -229,9 +229,21 @@ mod outer {
                     let visited = Outer::__project_into_nested(
                         event,
                         |event| {
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                                submachine,
+                                ::sotu::StateOrSuperstate::State(&*node),
+                                &event,
+                                context,
+                            );
                             let ::sotu::private::Dispatched { outcome, event } = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
                                 inner::Inner,
                             >>::__dispatch(node, submachine, event, context);
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                                submachine,
+                                ::sotu::StateOrSuperstate::State(&*node),
+                                &event,
+                                context,
+                            );
                             (outcome, event)
                         },
                     );
@@ -439,11 +451,23 @@ mod outer {
                     let visited = Outer::__project_into_nested(
                         event,
                         |event| {
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                                submachine,
+                                ::sotu::StateOrSuperstate::Superstate(&*node),
+                                &event,
+                                context,
+                            );
                             let ::sotu::private::Dispatched { outcome, event } = <<inner::Inner as ::sotu::blocking::IntoStateMachine>::Superstate<
                                 '_,
                             > as ::sotu::blocking::Superstate<
                                 inner::Inner,
                             >>::__dispatch(node, submachine, event, context);
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                                submachine,
+                                ::sotu::StateOrSuperstate::Superstate(&*node),
+                                &event,
+                                context,
+                            );
                             (outcome, event)
                         },
                     );
@@ -713,9 +737,21 @@ where
                 let visited = Nest::__project_into_holding(
                     event,
                     |event| {
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::State(&*node),
+                            &event,
+                            context,
+                        );
                         let ::sotu::private::Dispatched { outcome, event } = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
                             outer::Outer,
                         >>::__dispatch(node, submachine, event, context);
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::State(&*node),
+                            &event,
+                            context,
+                        );
                         (outcome, event)
                     },
                 );
@@ -921,11 +957,23 @@ where
                 let visited = Nest::__project_into_holding(
                     event,
                     |event| {
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::Superstate(&*node),
+                            &event,
+                            context,
+                        );
                         let ::sotu::private::Dispatched { outcome, event } = <<outer::Outer as ::sotu::blocking::IntoStateMachine>::Superstate<
                             '_,
                         > as ::sotu::blocking::Superstate<
                             outer::Outer,
                         >>::__dispatch(node, submachine, event, context);
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::Superstate(&*node),
+                            &event,
+                            context,
+                        );
                         (outcome, event)
                     },
                 );
