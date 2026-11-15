@@ -538,6 +538,10 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
 
     let same_state = (!mounts.is_empty()).then(|| state_same_state_method(name, dispatch, mounts));
     let boundary = (!mounts.is_empty()).then(|| state_boundary_methods(dispatch, mounts));
+
+    let internal_transition =
+        (!mounts.is_empty()).then(|| internal_transition_methods(dispatch, mounts));
+
     let generics = with_mount_bounds(generics, mounts);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
@@ -563,6 +567,8 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
             #same_state
 
             #boundary
+
+            #internal_transition
         }
     }
 }
@@ -1562,4 +1568,142 @@ fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) ->
 
     // The mount node of every mount is a variant without a child node.
     boundary_methods(&context, child_arms, true)
+}
+
+/// Generate `__internal_transition_nesting`, `__before_internal_transition`
+/// and `__after_internal_transition` of the state enum, which run the
+/// transition hooks of every child instance that a transition stays inside.
+///
+/// A transition from `Variant(source)` retains the mount node of `Variant`
+/// exactly when it exits no more levels than `source` lies deep inside the
+/// child, so the mount node is a common ancestor of source and target that is
+/// neither exited nor entered, and both states belong to the same child
+/// instance. Since every machine counts the exited levels from the same active
+/// leaf, the same `exit_levels` decides retention inside the child as well.
+///
+/// The nesting of a transition is the number of nested instances it stays
+/// inside. Level `1` runs the hooks of this machine's own child, and each
+/// deeper level is handed to the child with one level less. Without the
+/// child's storage, which only user code can empty, the hooks are skipped.
+fn internal_transition_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
+    let name = &dispatch.state.name;
+    let shared_storage_type = &dispatch.shared_storage;
+    let context_type = &dispatch.context_type;
+    let target = generated_ident("target");
+    let exit_levels = generated_ident("exit_levels");
+    let nesting = generated_ident("nesting");
+    let shared_storage = generated_ident("shared_storage");
+    let context = generated_ident("context");
+    let submachine = generated_ident("submachine");
+
+    let child_extension = |machine: &Type| {
+        quote! {
+            <<#machine as ::sotu::blocking::IntoStateMachine>::State
+                as ::sotu::blocking::StateExt<#machine>>
+        }
+    };
+
+    // With a single variant the pairs of equal variants are exhaustive, and a
+    // wildcard arm would be reported as unreachable in the user's crate.
+    let has_other_pairs = dispatch.arms.len() + mounts.len() > 1;
+
+    let nesting_arms = mounts.iter().map(|mount| {
+        let variant = &mount.variant;
+        let child_state = child_state_trait(&mount.machine);
+        let child_extension = child_extension(&mount.machine);
+
+        quote! {
+            (#name::#variant(source), #name::#variant(#target)) => {
+                if #exit_levels <= #child_extension::depth(source) {
+                    1 + #child_state::__internal_transition_nesting(source, #target, #exit_levels)
+                } else {
+                    0
+                }
+            }
+        }
+    });
+
+    let other_nesting = has_other_pairs.then(|| quote!(_ => 0,));
+
+    let [before, after] = [
+        ("__before_internal_transition", "before_transition"),
+        ("__after_internal_transition", "after_transition"),
+    ]
+    .map(|(method, hook)| {
+        let method = format_ident!("{method}");
+        let hook = format_ident!("{hook}");
+
+        let arms = mounts.iter().map(|mount| {
+            let variant = &mount.variant;
+            let machine = &mount.machine;
+            let child_state = child_state_trait(machine);
+            let child_extension = child_extension(machine);
+            let storage = field_call(mount, "MountField", "get_mut");
+
+            quote! {
+                (#name::#variant(source), #name::#variant(#target)) => {
+                    if #exit_levels > #child_extension::depth(source) {
+                        return;
+                    }
+
+                    let ::core::option::Option::Some(#submachine) = #storage else {
+                        return;
+                    };
+
+                    match #nesting.checked_sub(1) {
+                        ::core::option::Option::Some(0) => {
+                            <#machine as ::sotu::blocking::IntoStateMachine>::#hook(
+                                #submachine,
+                                source,
+                                #target,
+                                #context,
+                            );
+                        }
+                        ::core::option::Option::Some(deeper) => {
+                            #child_state::#method(
+                                source,
+                                #target,
+                                #exit_levels,
+                                deeper,
+                                #submachine,
+                                #context,
+                            );
+                        }
+                        ::core::option::Option::None => {}
+                    }
+                }
+            }
+        });
+
+        let other = has_other_pairs.then(|| quote!(_ => {}));
+
+        quote! {
+            fn #method<'ctx, 'data: 'ctx>(
+                &mut self,
+                #target: &mut Self,
+                #exit_levels: usize,
+                #nesting: usize,
+                #shared_storage: &mut #shared_storage_type,
+                #context: &mut #context_type,
+            ) {
+                match (self, #target) {
+                    #(#arms)*
+                    #other
+                }
+            }
+        }
+    });
+
+    quote! {
+        fn __internal_transition_nesting(&mut self, #target: &mut Self, #exit_levels: usize) -> usize {
+            match (self, #target) {
+                #(#nesting_arms)*
+                #other_nesting
+            }
+        }
+
+        #before
+
+        #after
+    }
 }
