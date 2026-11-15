@@ -295,6 +295,128 @@ mod outer {
                 }
             }
         }
+        fn __internal_transition_nesting(
+            &mut self,
+            target: &mut Self,
+            exit_levels: usize,
+        ) -> usize {
+            match (self, target) {
+                (State::Nested(source), State::Nested(target)) => {
+                    if exit_levels
+                        <= <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                            inner::Inner,
+                        >>::depth(source)
+                    {
+                        1
+                            + <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                                inner::Inner,
+                            >>::__internal_transition_nesting(
+                                source,
+                                target,
+                                exit_levels,
+                            )
+                    } else {
+                        0
+                    }
+                }
+            }
+        }
+        fn __before_internal_transition<'ctx, 'data: 'ctx>(
+            &mut self,
+            target: &mut Self,
+            exit_levels: usize,
+            nesting: usize,
+            shared_storage: &mut Outer,
+            context: &mut (),
+        ) {
+            match (self, target) {
+                (State::Nested(source), State::Nested(target)) => {
+                    if exit_levels
+                        > <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                            inner::Inner,
+                        >>::depth(source)
+                    {
+                        return;
+                    }
+                    let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                        inner::Inner,
+                    >::get_mut(&mut shared_storage.inner) else {
+                        return;
+                    };
+                    match nesting.checked_sub(1) {
+                        ::core::option::Option::Some(0) => {
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::before_transition(
+                                submachine,
+                                source,
+                                target,
+                                context,
+                            );
+                        }
+                        ::core::option::Option::Some(deeper) => {
+                            <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                                inner::Inner,
+                            >>::__before_internal_transition(
+                                source,
+                                target,
+                                exit_levels,
+                                deeper,
+                                submachine,
+                                context,
+                            );
+                        }
+                        ::core::option::Option::None => {}
+                    }
+                }
+            }
+        }
+        fn __after_internal_transition<'ctx, 'data: 'ctx>(
+            &mut self,
+            target: &mut Self,
+            exit_levels: usize,
+            nesting: usize,
+            shared_storage: &mut Outer,
+            context: &mut (),
+        ) {
+            match (self, target) {
+                (State::Nested(source), State::Nested(target)) => {
+                    if exit_levels
+                        > <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                            inner::Inner,
+                        >>::depth(source)
+                    {
+                        return;
+                    }
+                    let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                        inner::Inner,
+                    >::get_mut(&mut shared_storage.inner) else {
+                        return;
+                    };
+                    match nesting.checked_sub(1) {
+                        ::core::option::Option::Some(0) => {
+                            <inner::Inner as ::sotu::blocking::IntoStateMachine>::after_transition(
+                                submachine,
+                                source,
+                                target,
+                                context,
+                            );
+                        }
+                        ::core::option::Option::Some(deeper) => {
+                            <<inner::Inner as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                                inner::Inner,
+                            >>::__after_internal_transition(
+                                source,
+                                target,
+                                exit_levels,
+                                deeper,
+                                submachine,
+                                context,
+                            );
+                        }
+                        ::core::option::Option::None => {}
+                    }
+                }
+            }
+        }
     }
     impl<'sub> ::sotu::blocking::Superstate<Outer> for Superstate<'sub>
     where
@@ -799,6 +921,124 @@ where
                             event: event,
                         }
                     }
+                }
+            }
+        }
+    }
+    fn __internal_transition_nesting(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+    ) -> usize {
+        match (self, target) {
+            (State::Holding(source), State::Holding(target)) => {
+                if exit_levels
+                    <= <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        outer::Outer,
+                    >>::depth(source)
+                {
+                    1
+                        + <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            outer::Outer,
+                        >>::__internal_transition_nesting(source, target, exit_levels)
+                } else {
+                    0
+                }
+            }
+        }
+    }
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Nest,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Holding(source), State::Holding(target)) => {
+                if exit_levels
+                    > <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        outer::Outer,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    outer::Outer,
+                >::get_mut(&mut shared_storage.outer) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::before_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            outer::Outer,
+                        >>::__before_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+        }
+    }
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Nest,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Holding(source), State::Holding(target)) => {
+                if exit_levels
+                    > <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        outer::Outer,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    outer::Outer,
+                >::get_mut(&mut shared_storage.outer) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <outer::Outer as ::sotu::blocking::IntoStateMachine>::after_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<outer::Outer as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            outer::Outer,
+                        >>::__after_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
                 }
             }
         }
