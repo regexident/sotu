@@ -1319,16 +1319,19 @@ fn addressed_arm(
 /// Generate the arm of `__dispatch` for a child node bound as `node`.
 ///
 /// The child node is dispatched on the child's storage with the projected
-/// event, and its outcome is lifted. Without an instance, or when the
-/// projection fails, the remaining child nodes are skipped by deferring to the
-/// mount node, which sits as many levels above `node` as `node` is deep inside
-/// the child.
+/// event, and its outcome is lifted. The child's own dispatch hooks surround
+/// the child node, seeing it as `child_node` and the event in the child's
+/// types, so they nest inside the hooks of every enclosing machine. Without an
+/// instance, or when the projection fails, the remaining child nodes are
+/// skipped by deferring to the mount node, which sits as many levels above
+/// `node` as `node` is deep inside the child.
 fn dispatch_arm_into_child(
     context: &BoundaryContext<'_>,
     mount: &MountIr,
     pattern: &TokenStream,
     child_trait: &TokenStream,
     child_extension: &TokenStream,
+    child_node: &TokenStream,
 ) -> TokenStream {
     let storage = expression_path(context.shared_storage);
     let projection = &mount.projection;
@@ -1357,8 +1360,22 @@ fn dispatch_arm_into_child(
             };
 
             let visited = #storage::#projection(#event, |#event| {
+                <#machine as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                    #submachine,
+                    #child_node,
+                    &#event,
+                    #ctx,
+                );
+
                 let ::sotu::private::Dispatched { outcome, event } =
                     #child_trait::__dispatch(node, #submachine, #event, #ctx);
+
+                <#machine as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                    #submachine,
+                    #child_node,
+                    &event,
+                    #ctx,
+                );
 
                 (outcome, event)
             });
@@ -1483,7 +1500,14 @@ fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStr
 
             (
                 addressed_arm(&context, mount, &pattern, &child_trait),
-                dispatch_arm_into_child(&context, mount, &pattern, &child_trait, &child_extension),
+                dispatch_arm_into_child(
+                    &context,
+                    mount,
+                    &pattern,
+                    &child_trait,
+                    &child_extension,
+                    &quote!(::sotu::StateOrSuperstate::State(&*node)),
+                ),
             )
         })
         .collect();
@@ -1524,7 +1548,14 @@ fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) ->
 
             (
                 addressed_arm(&context, mount, &pattern, &child_trait),
-                dispatch_arm_into_child(&context, mount, &pattern, &child_trait, &child_extension),
+                dispatch_arm_into_child(
+                    &context,
+                    mount,
+                    &pattern,
+                    &child_trait,
+                    &child_extension,
+                    &quote!(::sotu::StateOrSuperstate::Superstate(&*node)),
+                ),
             )
         })
         .collect();
