@@ -585,3 +585,129 @@ fn missing_instance_defers_to_mount_handler() {
     );
     assert!(machine.door.is_none());
 }
+
+mod sensor {
+    use sotu::event::SubEvent;
+    use sotu::prelude::*;
+
+    use super::{dryer, trace};
+
+    #[derive(Default)]
+    pub struct Sensor;
+
+    /// A child event whose projection accepts every parent event and then
+    /// fails, breaking the laws of `SubEvent`.
+    // `project` never succeeds, so no value of this type is ever created.
+    #[allow(dead_code)]
+    pub struct Faulty(dryer::Tick);
+
+    impl SubEvent<dryer::Event> for Faulty {
+        fn accepts(_parent: &dryer::Event) -> bool {
+            true
+        }
+
+        fn project(parent: dryer::Event) -> Result<Self, dryer::Event> {
+            Err(parent)
+        }
+
+        fn embed(self) -> dryer::Event {
+            dryer::Event::Tick(self.0)
+        }
+    }
+
+    #[state_machine(initial = State::waiting())]
+    impl Sensor {
+        #[state(superstate = monitoring)]
+        fn waiting(event: &Faulty) -> Outcome<State> {
+            let Faulty(_) = event;
+
+            trace::record("sensor waiting handled event");
+
+            Handled
+        }
+
+        #[superstate]
+        fn monitoring(event: &Faulty) -> Outcome<State> {
+            let Faulty(_) = event;
+
+            trace::record("sensor monitoring handled event");
+
+            Handled
+        }
+    }
+}
+
+mod rig {
+    use sotu::prelude::*;
+
+    use super::{dryer, sensor, trace};
+
+    #[derive(Default)]
+    pub struct Rig {
+        pub sensor: Option<sensor::Sensor>,
+    }
+
+    #[state_machine(
+        initial = Superstate::probing(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after
+    )]
+    impl Rig {
+        fn before(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &dryer::Event,
+        ) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Probing(_)) => "rig before leaf",
+                StateOrSuperstate::Superstate(Superstate::Probing(SubmachineNode::Inner(_))) => {
+                    "rig before child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Probing(SubmachineNode::Mount)) => {
+                    "rig before mount"
+                }
+            });
+        }
+
+        fn after(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &dryer::Event,
+        ) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Probing(_)) => "rig after leaf",
+                StateOrSuperstate::Superstate(Superstate::Probing(SubmachineNode::Inner(_))) => {
+                    "rig after child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Probing(SubmachineNode::Mount)) => {
+                    "rig after mount"
+                }
+            });
+        }
+
+        #[submachine(machine = sensor::Sensor, field = sensor)]
+        fn probing(event: &dryer::Event) -> Outcome<State> {
+            trace::record(match event {
+                dryer::Event::Tick(_) => "probing saw tick",
+                _ => "probing saw other",
+            });
+
+            Handled
+        }
+    }
+}
+
+#[test]
+fn failed_projection_defers_to_mount_handler() {
+    let mut machine = rig::Rig::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.handle(dryer::Tick, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        ["rig before mount", "probing saw tick", "rig after mount"]
+    );
+    assert!(machine.sensor.is_some());
+}
