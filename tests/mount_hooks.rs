@@ -592,3 +592,125 @@ fn external_reentry_of_mount_fires_no_child_transition_hooks() {
         root::State::Mount(middle::State::Busy {})
     ));
 }
+
+// MARK: History
+
+mod dishwasher {
+    use sotu::prelude::*;
+
+    #[derive(Default)]
+    pub enum Resume {
+        #[default]
+        Idle,
+        Washing,
+    }
+
+    #[derive(Default)]
+    pub struct Dishwasher {
+        pub resume: Resume,
+    }
+
+    pub struct Start;
+
+    pub struct Opened;
+
+    pub struct Closed;
+
+    #[derive(Event)]
+    pub enum Event {
+        Start(Start),
+        Opened(Opened),
+        Closed(Closed),
+    }
+
+    #[state_machine(initial = State::idle(), after_transition = Self::remember)]
+    impl Dishwasher {
+        /// Record the state that closing the door resumes, which is the
+        /// closed-door state the machine has just left.
+        fn remember(&mut self, source: &State, _target: &State) {
+            match source {
+                State::Idle {} => self.resume = Resume::Idle,
+                State::Washing {} => self.resume = Resume::Washing,
+                State::DoorOpen {} => {}
+            }
+        }
+
+        #[superstate]
+        fn door_closed(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Opened(_) => Transition(State::door_open()),
+                Event::Start(_) | Event::Closed(_) => Super,
+            }
+        }
+
+        #[state(superstate = door_closed)]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Start(_) => Transition(State::washing()),
+                Event::Opened(_) | Event::Closed(_) => Super,
+            }
+        }
+
+        #[state(superstate = door_closed)]
+        fn washing() -> Outcome<State> {
+            Super
+        }
+
+        #[state]
+        fn door_open(&self, event: &Event) -> Outcome<State> {
+            match (event, &self.resume) {
+                (Event::Closed(_), Resume::Idle) => Transition(State::idle()),
+                (Event::Closed(_), Resume::Washing) => Transition(State::washing()),
+                (Event::Start(_) | Event::Opened(_), _) => Super,
+            }
+        }
+    }
+}
+
+mod kitchen {
+    use sotu::prelude::*;
+
+    use super::dishwasher;
+
+    #[derive(Default)]
+    pub struct Kitchen {
+        pub dishwasher: Option<dishwasher::Dishwasher>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Start(dishwasher::Start),
+        Opened(dishwasher::Opened),
+        Closed(dishwasher::Closed),
+    }
+
+    #[state_machine(initial = Superstate::appliance())]
+    impl Kitchen {
+        #[submachine(machine = dishwasher::Dishwasher, field = dishwasher)]
+        fn appliance(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Start(_) | Event::Opened(_) | Event::Closed(_) => Handled,
+            }
+        }
+    }
+}
+
+#[test]
+fn mounted_history_child_resumes() {
+    let mut machine = kitchen::Kitchen::default().state_machine();
+
+    machine.handle(dishwasher::Start, &mut ());
+    machine.handle(dishwasher::Opened, &mut ());
+
+    assert!(matches!(
+        machine.state(),
+        kitchen::State::Appliance(dishwasher::State::DoorOpen {})
+    ));
+
+    machine.handle(dishwasher::Closed, &mut ());
+
+    assert!(matches!(
+        machine.state(),
+        kitchen::State::Appliance(dishwasher::State::Washing {})
+    ));
+}
