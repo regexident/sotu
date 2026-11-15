@@ -348,9 +348,21 @@ where
                 let visited = House::__project_into_ringing(
                     event,
                     |event| {
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::State(&*node),
+                            &event,
+                            context,
+                        );
                         let ::sotu::private::Dispatched { outcome, event } = <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
                             bell::Bell,
                         >>::__dispatch(node, submachine, event, context);
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::State(&*node),
+                            &event,
+                            context,
+                        );
                         (outcome, event)
                     },
                 );
@@ -563,11 +575,23 @@ where
                 let visited = House::__project_into_ringing(
                     event,
                     |event| {
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::Superstate(&*node),
+                            &event,
+                            context,
+                        );
                         let ::sotu::private::Dispatched { outcome, event } = <<bell::Bell as ::sotu::blocking::IntoStateMachine>::Superstate<
                             '_,
                         > as ::sotu::blocking::Superstate<
                             bell::Bell,
                         >>::__dispatch(node, submachine, event, context);
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                            submachine,
+                            ::sotu::StateOrSuperstate::Superstate(&*node),
+                            &event,
+                            context,
+                        );
                         (outcome, event)
                     },
                 );
