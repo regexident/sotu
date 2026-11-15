@@ -100,6 +100,78 @@ error[E0308]: mismatched types
    = note: expected mutable reference `&mut u8`
               found mutable reference `&mut u16`
 note: method defined here
+  --> /src/blocking/into_state_machine.rs:68:8
+   |
+68 |     fn before_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/submachine/fail/context_mismatch.rs:25:1
+   |
+25 | #[state_machine(initial = State::idle(), context = u16)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut u8`, found `&mut u16`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut u8`
+              found mutable reference `&mut u16`
+note: method defined here
+  --> /src/blocking/state.rs:83:8
+   |
+83 |     fn __before_internal_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/submachine/fail/context_mismatch.rs:25:1
+   |
+25 | #[state_machine(initial = State::idle(), context = u16)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut u8`, found `&mut u16`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut u8`
+              found mutable reference `&mut u16`
+note: method defined here
+  --> /src/blocking/into_state_machine.rs:78:8
+   |
+78 |     fn after_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/submachine/fail/context_mismatch.rs:25:1
+   |
+25 | #[state_machine(initial = State::idle(), context = u16)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut u8`, found `&mut u16`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut u8`
+              found mutable reference `&mut u16`
+note: method defined here
+  --> /src/blocking/state.rs:94:8
+   |
+94 |     fn __after_internal_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/submachine/fail/context_mismatch.rs:25:1
+   |
+25 | #[state_machine(initial = State::idle(), context = u16)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut u8`, found `&mut u16`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut u8`
+              found mutable reference `&mut u16`
+note: method defined here
   --> /src/blocking/superstate.rs:29:8
    |
 29 |     fn call_entry_action<'ctx, 'data: 'ctx>(

@@ -317,6 +317,127 @@ where
             }
         }
     }
+    fn __internal_transition_nesting(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+    ) -> usize {
+        match (self, target) {
+            (State::Loading(source), State::Loading(target)) => {
+                if exit_levels
+                    <= <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        door::Door,
+                    >>::depth(source)
+                {
+                    1
+                        + <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            door::Door,
+                        >>::__internal_transition_nesting(source, target, exit_levels)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut House,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Loading(source), State::Loading(target)) => {
+                if exit_levels
+                    > <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        door::Door,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    door::Door,
+                >::get_mut(&mut shared_storage.door) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <door::Door as ::sotu::blocking::IntoStateMachine>::before_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            door::Door,
+                        >>::__before_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut House,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Loading(source), State::Loading(target)) => {
+                if exit_levels
+                    > <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        door::Door,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    door::Door,
+                >::get_mut(&mut shared_storage.door) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <door::Door as ::sotu::blocking::IntoStateMachine>::after_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<door::Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            door::Door,
+                        >>::__after_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<House> for Superstate<'sub>
 where

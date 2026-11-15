@@ -360,6 +360,127 @@ where
             }
         }
     }
+    fn __internal_transition_nesting(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+    ) -> usize {
+        match (self, target) {
+            (State::Cooling(source), State::Cooling(target)) => {
+                if exit_levels
+                    <= <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        fan::Fan,
+                    >>::depth(source)
+                {
+                    1
+                        + <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            fan::Fan,
+                        >>::__internal_transition_nesting(source, target, exit_levels)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Room,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Cooling(source), State::Cooling(target)) => {
+                if exit_levels
+                    > <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        fan::Fan,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    fan::Fan,
+                >::get_mut(&mut shared_storage.fan) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <fan::Fan as ::sotu::blocking::IntoStateMachine>::before_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            fan::Fan,
+                        >>::__before_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Room,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Cooling(source), State::Cooling(target)) => {
+                if exit_levels
+                    > <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        fan::Fan,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    fan::Fan,
+                >::get_mut(&mut shared_storage.fan) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <fan::Fan as ::sotu::blocking::IntoStateMachine>::after_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<fan::Fan as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            fan::Fan,
+                        >>::__after_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<Room> for Superstate<'sub>
 where

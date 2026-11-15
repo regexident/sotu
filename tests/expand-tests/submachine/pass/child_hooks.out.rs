@@ -360,6 +360,124 @@ where
             }
         }
     }
+    fn __internal_transition_nesting(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+    ) -> usize {
+        match (self, target) {
+            (State::Lighting(source), State::Lighting(target)) => {
+                if exit_levels
+                    <= <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        lamp::Lamp,
+                    >>::depth(source)
+                {
+                    1
+                        + <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            lamp::Lamp,
+                        >>::__internal_transition_nesting(source, target, exit_levels)
+                } else {
+                    0
+                }
+            }
+        }
+    }
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Desk,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Lighting(source), State::Lighting(target)) => {
+                if exit_levels
+                    > <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        lamp::Lamp,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    lamp::Lamp,
+                >::get_mut(&mut shared_storage.lamp) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <lamp::Lamp as ::sotu::blocking::IntoStateMachine>::before_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            lamp::Lamp,
+                        >>::__before_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+        }
+    }
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Desk,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Lighting(source), State::Lighting(target)) => {
+                if exit_levels
+                    > <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        lamp::Lamp,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    lamp::Lamp,
+                >::get_mut(&mut shared_storage.lamp) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <lamp::Lamp as ::sotu::blocking::IntoStateMachine>::after_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<lamp::Lamp as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            lamp::Lamp,
+                        >>::__after_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<Desk> for Superstate<'sub>
 where

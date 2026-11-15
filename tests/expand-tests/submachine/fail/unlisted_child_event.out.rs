@@ -423,6 +423,127 @@ where
             }
         }
     }
+    fn __internal_transition_nesting(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+    ) -> usize {
+        match (self, target) {
+            (State::Ringing(source), State::Ringing(target)) => {
+                if exit_levels
+                    <= <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        bell::Bell,
+                    >>::depth(source)
+                {
+                    1
+                        + <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            bell::Bell,
+                        >>::__internal_transition_nesting(source, target, exit_levels)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
+    }
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut House,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Ringing(source), State::Ringing(target)) => {
+                if exit_levels
+                    > <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        bell::Bell,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    bell::Bell,
+                >::get_mut(&mut shared_storage.bell) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::before_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            bell::Bell,
+                        >>::__before_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        target: &mut Self,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut House,
+        context: &mut (),
+    ) {
+        match (self, target) {
+            (State::Ringing(source), State::Ringing(target)) => {
+                if exit_levels
+                    > <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                        bell::Bell,
+                    >>::depth(source)
+                {
+                    return;
+                }
+                let ::core::option::Option::Some(submachine) = ::sotu::private::MountField::<
+                    bell::Bell,
+                >::get_mut(&mut shared_storage.bell) else {
+                    return;
+                };
+                match nesting.checked_sub(1) {
+                    ::core::option::Option::Some(0) => {
+                        <bell::Bell as ::sotu::blocking::IntoStateMachine>::after_transition(
+                            submachine,
+                            source,
+                            target,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::Some(deeper) => {
+                        <<bell::Bell as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                            bell::Bell,
+                        >>::__after_internal_transition(
+                            source,
+                            target,
+                            exit_levels,
+                            deeper,
+                            submachine,
+                            context,
+                        );
+                    }
+                    ::core::option::Option::None => {}
+                }
+            }
+            _ => {}
+        }
+    }
 }
 impl<'sub> ::sotu::blocking::Superstate<House> for Superstate<'sub>
 where
