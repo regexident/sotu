@@ -857,3 +857,172 @@ fn failed_reprojection_defers_to_mount_handler() {
     );
     assert!(machine.relay.is_some());
 }
+
+mod monitor {
+    use sotu::prelude::*;
+
+    use super::{door, trace};
+
+    #[derive(Default)]
+    pub struct Monitor {
+        pub door: Option<door::Door>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Open(door::Open),
+        Close(door::Close),
+    }
+
+    #[state_machine(initial = Superstate::loading(), before_dispatch = Self::before)]
+    impl Monitor {
+        fn before(&mut self, node: StateOrSuperstate<'_, State, Superstate<'_>>, event: &Event) {
+            if !matches!(event, Event::Open(_)) {
+                trace::record("unexpected event");
+
+                return;
+            }
+
+            trace::record(match node {
+                StateOrSuperstate::State(State::Loading(_)) => "leaf",
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Inner(
+                    door::Superstate::Frame {},
+                ))) => "child superstate",
+                StateOrSuperstate::Superstate(Superstate::Loading(SubmachineNode::Mount)) => {
+                    "mount"
+                }
+            });
+        }
+
+        #[submachine(machine = door::Door, field = door)]
+        fn loading(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Open(_) | Event::Close(_) => Handled,
+            }
+        }
+    }
+}
+
+#[test]
+fn root_hooks_see_child_nodes_in_parent_types() {
+    let mut machine = monitor::Monitor::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    trace::take();
+    machine.handle(door::Open, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "leaf",
+            "opened deferred open",
+            "child superstate",
+            "frame deferred open",
+            "mount",
+        ]
+    );
+}
+
+mod bolt {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    #[derive(Default)]
+    pub struct Bolt;
+
+    pub struct Knock;
+
+    #[derive(Event)]
+    pub enum Event {
+        Knock(Knock),
+    }
+
+    #[state_machine(initial = State::shut())]
+    impl Bolt {
+        #[state]
+        fn shut(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Knock(_) => trace::record("bolt saw knock"),
+            }
+
+            Handled
+        }
+    }
+}
+
+mod lock {
+    use sotu::prelude::*;
+
+    use super::{bolt, door, trace};
+
+    #[derive(Default)]
+    pub struct Lock {
+        pub bolt: Option<bolt::Bolt>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Knock(bolt::Knock),
+        Close(door::Close),
+    }
+
+    #[state_machine(initial = Superstate::locked())]
+    impl Lock {
+        #[submachine(machine = bolt::Bolt, field = bolt)]
+        fn locked(event: &Event) -> Outcome<State> {
+            trace::record(match event {
+                Event::Knock(_) => "lock mount saw knock",
+                Event::Close(_) => "lock mount saw close",
+            });
+
+            Handled
+        }
+    }
+}
+
+mod porch {
+    use sotu::prelude::*;
+
+    use super::{bolt, door, lock, trace};
+
+    #[derive(Default)]
+    pub struct Porch {
+        pub lock: Option<lock::Lock>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Knock(bolt::Knock),
+        Close(door::Close),
+    }
+
+    #[state_machine(initial = Superstate::guarding())]
+    impl Porch {
+        #[submachine(machine = lock::Lock, field = lock)]
+        fn guarding(event: &Event) -> Outcome<State> {
+            trace::record(match event {
+                Event::Knock(_) => "porch saw knock",
+                Event::Close(_) => "porch saw close",
+            });
+
+            Handled
+        }
+    }
+}
+
+#[test]
+fn grandchild_is_skipped_for_events_only_child_lists() {
+    let mut machine = porch::Porch::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.handle(door::Close, &mut ());
+
+    assert_eq!(trace::take(), ["lock mount saw close"]);
+
+    machine.handle(bolt::Knock, &mut ());
+
+    assert_eq!(trace::take(), ["bolt saw knock"]);
+}
