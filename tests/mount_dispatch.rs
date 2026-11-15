@@ -388,3 +388,200 @@ fn addressing_matches_listed_types(input: DryerInput) {
 
     proptest::prop_assert_eq!(reaches_child, is_listed);
 }
+
+#[test]
+fn child_transition_is_lifted_and_keeps_instance() {
+    let mut machine = washer::Washer::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    trace::take();
+    machine.handle(washer::Start, &mut ());
+    machine.handle(door::Close, &mut ());
+    machine.handle(door::Open, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "door created",
+            "opened handled close",
+            "closed handled open"
+        ]
+    );
+    assert!(matches!(
+        machine.state(),
+        washer::State::Loading(door::State::Opened {})
+    ));
+    assert!(machine.door.is_some());
+}
+
+mod shutter {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    pub struct Shutter;
+
+    impl Default for Shutter {
+        fn default() -> Self {
+            trace::record("shutter created");
+
+            Self
+        }
+    }
+
+    impl Drop for Shutter {
+        fn drop(&mut self) {
+            trace::record("shutter dropped");
+        }
+    }
+
+    pub struct Reset;
+
+    #[derive(Event)]
+    pub enum Event {
+        Reset(Reset),
+    }
+
+    #[state_machine(initial = State::closed())]
+    impl Shutter {
+        #[state(superstate = frame, entry_action = enter_opened, exit_action = exit_opened)]
+        fn opened(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Reset(_) => trace::record("opened deferred reset"),
+            }
+
+            Super
+        }
+
+        #[state(superstate = frame, entry_action = enter_closed, exit_action = exit_closed)]
+        fn closed(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Reset(_) => trace::record("closed deferred reset"),
+            }
+
+            Super
+        }
+
+        #[superstate(entry_action = enter_frame, exit_action = exit_frame)]
+        fn frame(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Reset(_) => trace::record("frame handled reset"),
+            }
+
+            ExternalTransition(State::opened())
+        }
+
+        #[action]
+        fn enter_opened() {
+            trace::record("enter opened");
+        }
+
+        #[action]
+        fn exit_opened() {
+            trace::record("exit opened");
+        }
+
+        #[action]
+        fn enter_closed() {
+            trace::record("enter closed");
+        }
+
+        #[action]
+        fn exit_closed() {
+            trace::record("exit closed");
+        }
+
+        #[action]
+        fn enter_frame() {
+            trace::record("enter frame");
+        }
+
+        #[action]
+        fn exit_frame() {
+            trace::record("exit frame");
+        }
+    }
+}
+
+mod booth {
+    use sotu::prelude::*;
+
+    use super::{shutter, trace};
+
+    #[derive(Default)]
+    pub struct Booth {
+        pub shutter: Option<shutter::Shutter>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Reset(shutter::Reset),
+    }
+
+    #[state_machine(initial = Superstate::framing())]
+    impl Booth {
+        #[submachine(machine = shutter::Shutter, field = shutter)]
+        fn framing(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Reset(_) => trace::record("framing saw reset"),
+            }
+
+            Handled
+        }
+    }
+}
+
+#[test]
+fn child_external_transition_reenters_child_superstate_only() {
+    let mut machine = booth::Booth::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    assert_eq!(
+        trace::take(),
+        ["shutter created", "enter frame", "enter closed"]
+    );
+
+    machine.handle(shutter::Reset, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "closed deferred reset",
+            "frame handled reset",
+            "exit closed",
+            "exit frame",
+            "enter frame",
+            "enter opened",
+        ]
+    );
+    assert!(matches!(
+        machine.state(),
+        booth::State::Framing(shutter::State::Opened {})
+    ));
+    assert!(machine.shutter.is_some());
+}
+
+#[test]
+fn missing_instance_defers_to_mount_handler() {
+    let mut machine = loading_dryer();
+
+    machine.inner_mut().door = None;
+
+    assert_eq!(trace::take(), ["door dropped"]);
+
+    machine.handle(door::Open, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "root before leaf",
+            "root after leaf",
+            "root before loading",
+            "loading saw open",
+            "root after loading",
+        ]
+    );
+    assert!(machine.door.is_none());
+}
