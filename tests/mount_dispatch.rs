@@ -711,3 +711,149 @@ fn failed_projection_defers_to_mount_handler() {
     );
     assert!(machine.sensor.is_some());
 }
+
+mod relay {
+    use std::cell::Cell;
+
+    use sotu::event::SubEvent;
+    use sotu::prelude::*;
+
+    use super::{dryer, trace};
+
+    std::thread_local! {
+        static PROJECTIONS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    #[derive(Default)]
+    pub struct Relay;
+
+    /// A child event whose projection succeeds on every odd-numbered call on
+    /// the current thread and fails on every even-numbered one, so a
+    /// projection that addressed a node fails when that node is dispatched.
+    pub struct Signal(dryer::Tick);
+
+    impl SubEvent<dryer::Event> for Signal {
+        fn accepts(parent: &dryer::Event) -> bool {
+            matches!(parent, dryer::Event::Tick(_))
+        }
+
+        fn project(parent: dryer::Event) -> Result<Self, dryer::Event> {
+            let call = PROJECTIONS.with(|projections| {
+                projections.set(projections.get() + 1);
+
+                projections.get()
+            });
+
+            match parent {
+                dryer::Event::Tick(tick) if call % 2 == 1 => Ok(Self(tick)),
+                other => Err(other),
+            }
+        }
+
+        fn embed(self) -> dryer::Event {
+            dryer::Event::Tick(self.0)
+        }
+    }
+
+    #[state_machine(initial = State::listening())]
+    impl Relay {
+        #[state(superstate = wiring)]
+        fn listening(event: &Signal) -> Outcome<State> {
+            let Signal(_) = event;
+
+            trace::record("relay listening handled signal");
+
+            Handled
+        }
+
+        #[superstate]
+        fn wiring(event: &Signal) -> Outcome<State> {
+            let Signal(_) = event;
+
+            trace::record("relay wiring handled signal");
+
+            Handled
+        }
+    }
+}
+
+mod console {
+    use sotu::prelude::*;
+
+    use super::{dryer, relay, trace};
+
+    #[derive(Default)]
+    pub struct Console {
+        pub relay: Option<relay::Relay>,
+    }
+
+    #[state_machine(
+        initial = Superstate::relaying(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after
+    )]
+    impl Console {
+        fn before(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &dryer::Event,
+        ) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Relaying(_)) => "console before leaf",
+                StateOrSuperstate::Superstate(Superstate::Relaying(SubmachineNode::Inner(_))) => {
+                    "console before child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Relaying(SubmachineNode::Mount)) => {
+                    "console before mount"
+                }
+            });
+        }
+
+        fn after(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &dryer::Event,
+        ) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Relaying(_)) => "console after leaf",
+                StateOrSuperstate::Superstate(Superstate::Relaying(SubmachineNode::Inner(_))) => {
+                    "console after child superstate"
+                }
+                StateOrSuperstate::Superstate(Superstate::Relaying(SubmachineNode::Mount)) => {
+                    "console after mount"
+                }
+            });
+        }
+
+        #[submachine(machine = relay::Relay, field = relay)]
+        fn relaying(event: &dryer::Event) -> Outcome<State> {
+            trace::record(match event {
+                dryer::Event::Tick(_) => "relaying saw tick",
+                _ => "relaying saw other",
+            });
+
+            Handled
+        }
+    }
+}
+
+#[test]
+fn failed_reprojection_defers_to_mount_handler() {
+    let mut machine = console::Console::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.handle(dryer::Tick, &mut ());
+
+    assert_eq!(
+        trace::take(),
+        [
+            "console before leaf",
+            "console after leaf",
+            "console before mount",
+            "relaying saw tick",
+            "console after mount",
+        ]
+    );
+    assert!(machine.relay.is_some());
+}
