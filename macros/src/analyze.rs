@@ -37,6 +37,12 @@ pub(crate) struct Model {
         expect(dead_code, reason = "generated parameters have fixed names")
     )]
     pub(crate) context_identifier: Ident,
+    /// The name of the input that borrows a mounted machine.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "generated parameters have fixed names")
+    )]
+    pub(crate) submachine_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
     /// Whether `#[state_machine]` declares the exit type with `exit = Type`.
@@ -198,8 +204,9 @@ pub(crate) enum InputKind {
     Event,
     /// The context input, named `context` unless `context_identifier` renames it.
     Context,
-    /// The `submachine` input of a mount handler, which borrows the storage of
-    /// the mounted machine.
+    /// The `submachine` input of a mount handler or mount action, which borrows
+    /// the storage of the mounted machine. It is named `submachine` unless
+    /// `submachine_identifier` renames it.
     Submachine,
     /// A reference to the local storage field called `name`.
     LocalStorage {
@@ -234,6 +241,16 @@ struct InputNames {
     context: Ident,
     /// The name of the input that borrows a mounted machine.
     submachine: Ident,
+}
+
+/// A function that a mount calls with access to its instance: the mount
+/// handler or one of the mount's actions.
+struct Attachment {
+    /// The name of the function.
+    function: Ident,
+    /// The field holding the mounted machine, or `None` if the mount lacks
+    /// `field`, which is reported on its own.
+    field: Option<Ident>,
 }
 
 /// The handlers and actions of an impl block, in declaration order.
@@ -326,6 +343,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         context_type: arguments.context.unwrap_or_else(|| parse_quote!(())),
         event_identifier: names.event,
         context_identifier: names.context,
+        submachine_identifier: names.submachine,
         declares_exit: arguments.exit.is_some(),
         exit_type: arguments
             .exit
@@ -375,8 +393,18 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut event_type = None;
     let mut context_inputs = Vec::new();
 
-    for impl_item in &mut item.items {
-        let Some((attribute, source)) = take_item_attribute(impl_item, &mut errors) else {
+    // Whether an action may take `submachine` depends on the mount that names
+    // it, which may come after the action, so every attribute is taken first.
+    let taken: Vec<Option<(ItemAttribute, Attribute)>> = item
+        .items
+        .iter_mut()
+        .map(|impl_item| take_item_attribute(impl_item, &mut errors))
+        .collect();
+
+    let mount_actions = mount_actions(&taken);
+
+    for (impl_item, taken) in item.items.iter_mut().zip(taken) {
+        let Some((attribute, source)) = taken else {
             continue;
         };
 
@@ -386,7 +414,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
 
         match (attribute, &mut *impl_item) {
             (ItemAttribute::State(state_arguments), ImplItem::Fn(function)) => {
-                check_signature(function, Role::State, names, &mut errors);
+                check_signature(function, Role::State, names, None, &mut errors);
                 states.push(analyze_state(
                     function,
                     state_arguments,
@@ -396,7 +424,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Superstate(superstate_arguments), ImplItem::Fn(function)) => {
-                check_signature(function, Role::Superstate, names, &mut errors);
+                check_signature(function, Role::Superstate, names, None, &mut errors);
                 superstates.push(analyze_superstate(
                     function,
                     superstate_arguments,
@@ -406,7 +434,18 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Submachine(submachine_arguments), ImplItem::Fn(function)) => {
-                check_signature(function, Role::Submachine, names, &mut errors);
+                let attachment = Attachment {
+                    function: function.sig.ident.clone(),
+                    field: submachine_arguments.field.clone(),
+                };
+
+                check_signature(
+                    function,
+                    Role::Submachine,
+                    names,
+                    Some(&attachment),
+                    &mut errors,
+                );
                 mounts.push(analyze_mount(
                     function,
                     submachine_arguments,
@@ -417,8 +456,12 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
-                check_signature(function, Role::Action, names, &mut errors);
-                actions.push(analyze_action(function, names));
+                let attachment = mount_actions
+                    .iter()
+                    .find(|attachment| attachment.function == function.sig.ident);
+
+                check_signature(function, Role::Action, names, attachment, &mut errors);
+                actions.push(analyze_action(function, names, attachment.is_some()));
             }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
@@ -458,6 +501,29 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     };
 
     (nodes, errors)
+}
+
+/// Return the actions that the mounts among `taken` attach, each with the field
+/// of its mount.
+fn mount_actions(taken: &[Option<(ItemAttribute, Attribute)>]) -> Vec<Attachment> {
+    let mut attachments = Vec::new();
+
+    for (attribute, _) in taken.iter().flatten() {
+        let ItemAttribute::Submachine(arguments) = attribute else {
+            continue;
+        };
+
+        let actions = [&arguments.entry_action, &arguments.exit_action];
+
+        for action in actions.into_iter().flatten() {
+            attachments.push(Attachment {
+                function: action.clone(),
+                field: arguments.field.clone(),
+            });
+        }
+    }
+
+    attachments
 }
 
 /// Remove the attributes of `sotu` from `item`, returning the one it carried
@@ -589,17 +655,28 @@ fn check_duplicate_variants(
 }
 
 /// Report the signature errors of the handler or action `function`.
+///
+/// `attachment` is the mount access of a mount handler or mount action, and
+/// `None` for every other function.
 fn check_signature(
     function: &ImplItemFn,
     role: Role,
     names: &InputNames,
+    attachment: Option<&Attachment>,
     errors: &mut Option<syn::Error>,
 ) {
     check_generics(function, role, errors);
     check_default_attributes(function, role, names, errors);
     check_input_patterns(function, errors);
     check_inputs_by_reference(function, role, names, errors);
-    check_submachine_input(function, role, errors);
+
+    match attachment {
+        Some(Attachment {
+            field: Some(field), ..
+        }) => check_receiver_and_submachine(function, field, names, errors),
+        Some(Attachment { field: None, .. }) => {}
+        None => check_submachine_input(function, role, names, errors),
+    }
 
     if role == Role::Submachine {
         check_mount_inputs(function, names, errors);
@@ -769,29 +846,75 @@ fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Op
 /// Report the `submachine` input of `function`, a handler or action of the kind `role`.
 ///
 /// Only a mount has a submachine whose storage the input could borrow, so the
-/// input is rejected on every handler but a mount handler. Mounts declare no
-/// actions, so the input is rejected on every action. An input that is not a
-/// reference is left to [`check_inputs_by_reference`], so that it is reported
-/// once.
-fn check_submachine_input(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Error>) {
+/// input is rejected on every handler but a mount handler, and on every action
+/// that no mount attaches. An input that is not a reference is left to
+/// [`check_inputs_by_reference`], so that it is reported once.
+fn check_submachine_input(
+    function: &ImplItemFn,
+    role: Role,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) {
     if role == Role::Submachine {
         return;
     }
-
-    let submachine = Ident::new("submachine", Span::call_site());
 
     for input in &function.sig.inputs {
         let FnArg::Typed(typed) = input else {
             continue;
         };
 
-        if is_named(typed, &submachine) && local_storage_input(typed).is_some() {
+        if is_named(typed, &names.submachine) && local_storage_input(typed).is_some() {
             push_error(
                 errors,
                 syn::Error::new_spanned(
                     typed,
                     "`submachine` is only available on submachine handlers, their actions and \
                      exit handlers",
+                ),
+            );
+        }
+    }
+}
+
+/// Report the `submachine` input of the mount handler or mount action
+/// `function` if it also takes a receiver.
+///
+/// The input borrows `field` of the shared storage, which the receiver borrows
+/// as a whole, so no call could pass both. An input that is not a reference is
+/// left to [`check_inputs_by_reference`], so that it is reported once.
+fn check_receiver_and_submachine(
+    function: &ImplItemFn,
+    field: &Ident,
+    names: &InputNames,
+    errors: &mut Option<syn::Error>,
+) {
+    let takes_receiver = function
+        .sig
+        .inputs
+        .iter()
+        .any(|input| matches!(input, FnArg::Receiver(_)));
+
+    if !takes_receiver {
+        return;
+    }
+
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        if is_named(typed, &names.submachine) && local_storage_input(typed).is_some() {
+            let submachine = &names.submachine;
+
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    format!(
+                        "`{submachine}` borrows field `{field}` of `self`; take either a \
+                         receiver or `{submachine}`, not both"
+                    ),
                 ),
             );
         }
@@ -1033,9 +1156,12 @@ fn analyze_state(
 
 /// Classify the inputs of the action `function`.
 ///
-/// Inputs that are not local storage are skipped, since
-/// [`check_input_patterns`] and [`check_inputs_by_reference`] report them.
-fn analyze_action(function: &ImplItemFn, names: &InputNames) -> ActionModel {
+/// Only an action that a mount attaches has a `submachine` input, so on any
+/// other action an input of that name is local storage, which
+/// [`check_submachine_input`] reports. Inputs that are not local storage are
+/// skipped, since [`check_input_patterns`] and [`check_inputs_by_reference`]
+/// report them.
+fn analyze_action(function: &ImplItemFn, names: &InputNames, attached: bool) -> ActionModel {
     let mut inputs = Vec::new();
 
     for input in &function.sig.inputs {
@@ -1043,6 +1169,9 @@ fn analyze_action(function: &ImplItemFn, names: &InputNames) -> ActionModel {
             FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
             FnArg::Typed(typed) if is_named(typed, &names.context) => {
                 inputs.push(InputKind::Context);
+            }
+            FnArg::Typed(typed) if attached && is_named(typed, &names.submachine) => {
+                inputs.push(InputKind::Submachine);
             }
             FnArg::Typed(typed) => {
                 if let Some((name, ty, mutable)) = local_storage_input(typed) {
@@ -2304,20 +2433,84 @@ mod tests {
 
         let mut accepted = None;
 
-        check_submachine_input(&mount, Role::Submachine, &mut accepted);
+        check_submachine_input(&mount, Role::Submachine, &names(), &mut accepted);
 
         assert!(accepted.is_none());
 
         let mut errors = None;
 
-        check_submachine_input(&state, Role::State, &mut errors);
-        check_submachine_input(&superstate, Role::Superstate, &mut errors);
-        check_submachine_input(&action, Role::Action, &mut errors);
+        check_submachine_input(&state, Role::State, &names(), &mut errors);
+        check_submachine_input(&superstate, Role::Superstate, &names(), &mut errors);
+        check_submachine_input(&action, Role::Action, &names(), &mut errors);
 
         let message = "`submachine` is only available on submachine handlers, their actions and \
                        exit handlers";
 
         assert_eq!(messages(errors), [message, message, message]);
+    }
+
+    #[test]
+    fn receiver_and_submachine_conflict_is_reported() {
+        let (_, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl House {
+                    #[submachine(machine = Door, field = door, entry_action = greet)]
+                    fn loading(&mut self, submachine: &mut Door) -> Outcome<State> {
+                        Super
+                    }
+
+                    #[action]
+                    fn greet(&self, context: &mut Sink, submachine: &mut Door) {}
+
+                    #[action]
+                    fn unrelated(&mut self) {}
+                }
+            },
+            &names(),
+        );
+
+        let message = "`submachine` borrows field `door` of `self`; take either a receiver or \
+                       `submachine`, not both";
+
+        assert_eq!(messages(errors), [message, message]);
+    }
+
+    #[test]
+    fn mount_action_may_take_submachine() {
+        let model = model(parse_quote! {
+            impl House {
+                #[action]
+                fn greet(submachine: &mut Door) {}
+
+                #[submachine(machine = Door, field = door, entry_action = greet)]
+                fn loading(event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(model.actions[0].inputs, [InputKind::Submachine]);
+        assert_eq!(model.mounts[0].entry_action, Some(ident("greet")));
+        assert_eq!(model.submachine_identifier, ident("submachine"));
+
+        let item: ItemImpl = parse_quote! {
+            impl House {
+                #[action]
+                fn greet(submachine: &mut Door) {}
+
+                #[submachine(machine = Door, field = door, entry_action = greet, exit_action = absent)]
+                fn loading(event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        };
+
+        let message = match analyze(arguments(), item) {
+            Ok(_) => panic!("an unknown mount exit action should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(message, "exit action not found");
     }
 
     #[test]
