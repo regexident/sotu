@@ -62,11 +62,25 @@ pub(crate) struct MountIr {
     pub(crate) handler: CallIr,
     /// Whether the mount handler takes the `submachine` input.
     pub(crate) takes_submachine: bool,
+    /// The action to run after the instance is created, before the child's
+    /// entry actions.
+    pub(crate) entry_action: Option<MountActionIr>,
+    /// The action to run after the child's exit actions, before the instance
+    /// is released.
+    pub(crate) exit_action: Option<MountActionIr>,
     /// The hidden associated function of the shared storage that projects a
     /// parent event into the child's event type for the duration of a visit.
     pub(crate) projection: Ident,
     /// The node enclosing the mount node, or `None` for a top-level mount.
     pub(crate) parent: Option<ParentIr>,
+}
+
+/// A call of an action attached to a mount.
+pub(crate) struct MountActionIr {
+    /// The call to the action.
+    pub(crate) call: CallIr,
+    /// Whether the action takes the `submachine` input.
+    pub(crate) takes_submachine: bool,
 }
 
 /// The generated state enum and its constructors.
@@ -413,9 +427,23 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         superstate_type: mount_superstate_type(mount),
         handler: lower_call(&mount.handler, &mount.inputs),
         takes_submachine: mount.inputs.contains(&InputKind::Submachine),
+        entry_action: lower_mount_action(&model.actions, mount.entry_action.as_ref()),
+        exit_action: lower_mount_action(&model.actions, mount.exit_action.as_ref()),
         projection: format_ident!("__project_into_{}", mount.constructor),
         parent: parent.map(|parent| lower_parent(parent, |_| None)),
     }
+}
+
+/// Lower the call of the action that `name` names among `actions`, or `None`
+/// without a name.
+fn lower_mount_action(actions: &[ActionModel], name: Option<&Ident>) -> Option<MountActionIr> {
+    let name = name?;
+    let action = actions.iter().find(|action| action.name == *name)?;
+
+    Some(MountActionIr {
+        call: lower_call(&action.name, &action.inputs),
+        takes_submachine: action.inputs.contains(&InputKind::Submachine),
+    })
 }
 
 /// Return the child's state type, which the mount's state variant holds.
