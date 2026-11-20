@@ -137,6 +137,8 @@ pub(crate) struct MachineArgs {
     pub(crate) event_identifier: Option<Ident>,
     /// The name of the context input, replacing `context`.
     pub(crate) context_identifier: Option<Ident>,
+    /// The name of the input that borrows a mounted machine, replacing `submachine`.
+    pub(crate) submachine_identifier: Option<Ident>,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit: Option<Type>,
     /// The function called just before a node handles an event.
@@ -193,6 +195,7 @@ impl MachineArgs {
         "context",
         "event_identifier",
         "context_identifier",
+        "submachine_identifier",
         "exit",
         "before_dispatch",
         "after_dispatch",
@@ -294,6 +297,8 @@ impl MachineArgs {
 
         if key == "event_identifier" {
             self.event_identifier = Some(ident);
+        } else if key == "submachine_identifier" {
+            self.submachine_identifier = Some(ident);
         } else {
             self.context_identifier = Some(ident);
         }
@@ -309,6 +314,7 @@ impl Parse for MachineArgs {
             context: None,
             event_identifier: None,
             context_identifier: None,
+            submachine_identifier: None,
             exit: None,
             before_dispatch: None,
             after_dispatch: None,
@@ -1226,6 +1232,19 @@ mod tests {
         let factory = arguments.factory;
 
         assert_eq!(quote!(#factory).to_string(), "Self :: make_door");
+    }
+
+    #[test]
+    fn machine_arguments_read_submachine_identifier() {
+        let arguments: MachineArgs =
+            syn::parse_str("initial = State::a(), submachine_identifier = child").unwrap();
+
+        assert!(
+            arguments
+                .submachine_identifier
+                .is_some_and(|name| name == "child")
+        );
+        assert!(arguments.context_identifier.is_none());
     }
 
     #[test]
