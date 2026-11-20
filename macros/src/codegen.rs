@@ -822,23 +822,14 @@ fn mount_handler_arms(
     let variant = &mount.variant;
     let handler = call(shared_storage, &mount.handler);
 
-    // A mount handler taking the `submachine` input borrows the child's storage,
-    // which is absent only when user code emptied an active instance field.
-    // The event then passes on to the mount's superstates.
+    // Without the instance, the event passes on to the mount's superstates.
     let mount_call = if mount.takes_submachine {
-        let field = &mount.field;
-        let submachine = generated_ident("submachine");
-        let storage = quote_spanned! {field.span()=>
-            &mut #shared_storage_parameter.#field
-        };
-        let machine = &mount.machine;
-
-        quote! {
-            match ::sotu::private::MountField::<#machine>::get_mut(#storage) {
-                ::core::option::Option::Some(#submachine) => #handler,
-                ::core::option::Option::None => ::sotu::Outcome::Super,
-            }
-        }
+        instance_call(
+            mount,
+            shared_storage_parameter,
+            &handler,
+            &quote!(::sotu::Outcome::Super),
+        )
     } else {
         handler
     };
@@ -846,6 +837,32 @@ fn mount_handler_arms(
     quote! {
         #enum_name::#variant(::sotu::SubmachineNode::Inner(_)) => ::sotu::Outcome::Super,
         #enum_name::#variant(::sotu::SubmachineNode::Mount) => #mount_call,
+    }
+}
+
+/// Generate `call` with the `submachine` input bound to the mount's instance,
+/// borrowed from the shared storage named `shared_storage_parameter`.
+///
+/// The instance is absent only when user code emptied an active instance
+/// field, and the expression is then `vacant` instead.
+fn instance_call(
+    mount: &MountIr,
+    shared_storage_parameter: &Ident,
+    call: &TokenStream,
+    vacant: &TokenStream,
+) -> TokenStream {
+    let field = &mount.field;
+    let submachine = generated_ident("submachine");
+    let storage = quote_spanned! {field.span()=>
+        &mut #shared_storage_parameter.#field
+    };
+    let machine = &mount.machine;
+
+    quote! {
+        match ::sotu::private::MountField::<#machine>::get_mut(#storage) {
+            ::core::option::Option::Some(#submachine) => #call,
+            ::core::option::Option::None => #vacant,
+        }
     }
 }
 
