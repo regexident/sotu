@@ -10,9 +10,9 @@ use syn::{
 
 use crate::analyze::HooksModel;
 use crate::lower::{
-    ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr, MountIr,
-    NodeTypeIr, ParentArmIr, ParentDispatchIr, ParentFieldIr, ParentIr, PatternIr, StateEnumIr,
-    SuperstateIr, generated_ident,
+    ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr,
+    MountActionIr, MountIr, NodeTypeIr, ParentArmIr, ParentDispatchIr, ParentFieldIr, ParentIr,
+    PatternIr, StateEnumIr, SuperstateIr, generated_ident,
 };
 
 // MARK: Generation
@@ -1148,8 +1148,10 @@ fn state_lifecycle_arm(enum_name: &Ident, mount: &MountIr, method: &Ident) -> To
 /// leaving it releases the field, so an `Option` field is `Some` exactly while
 /// the mount node is active. Since the mount node is entered before and left
 /// after every node of the child, the child's actions always find its storage.
-/// A superstate of the child runs the same action of the child's superstate on
-/// the child's storage.
+/// The mount's own entry action runs after the instance is filled and its exit
+/// action before the instance is released, so both can borrow it. A superstate
+/// of the child runs the same action of the child's superstate on the child's
+/// storage.
 fn superstate_lifecycle_arms(
     enum_name: &Ident,
     shared_storage: &Type,
@@ -1158,7 +1160,9 @@ fn superstate_lifecycle_arms(
 ) -> TokenStream {
     let variant = &mount.variant;
 
-    let mount_node = if method == "call_entry_action" {
+    let is_entry = method == "call_entry_action";
+
+    let instance = if is_entry {
         match &mount.factory {
             Some(factory) => factory_call(shared_storage, mount, factory),
             None => field_call(mount, "DefaultInstance", "fill_default"),
@@ -1167,11 +1171,53 @@ fn superstate_lifecycle_arms(
         field_call(mount, "MountField", "release")
     };
 
+    let action = if is_entry {
+        &mount.entry_action
+    } else {
+        &mount.exit_action
+    };
+
+    let mount_node = match action {
+        Some(action) => {
+            let action = mount_action(shared_storage, mount, action);
+
+            let steps = if is_entry {
+                [&instance, &action]
+            } else {
+                [&action, &instance]
+            };
+
+            quote! {
+                {
+                    #(#steps;)*
+                }
+            }
+        }
+        None => instance,
+    };
+
     let child_action = child_action(mount, &child_superstate_trait(&mount.machine), method);
 
     quote! {
         #enum_name::#variant(::sotu::SubmachineNode::Mount) => #mount_node,
         #enum_name::#variant(::sotu::SubmachineNode::Inner(state)) => #child_action,
+    }
+}
+
+/// Generate the call of the mount's `action`, which is skipped if it takes the
+/// `submachine` input and the instance is absent.
+fn mount_action(shared_storage: &Type, mount: &MountIr, action: &MountActionIr) -> TokenStream {
+    let call = call(shared_storage, &action.call);
+
+    if action.takes_submachine {
+        instance_call(
+            mount,
+            &generated_ident("shared_storage"),
+            &call,
+            &quote!({}),
+        )
+    } else {
+        call
     }
 }
 
