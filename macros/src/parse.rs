@@ -614,6 +614,10 @@ pub(crate) struct SubmachineArgs {
     pub(crate) name: Option<Ident>,
     /// The handler name of the enclosing superstate.
     pub(crate) superstate: Option<Ident>,
+    /// The action to run after the mounted machine is created.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run before the mounted machine is released.
+    pub(crate) exit_action: Option<Ident>,
 }
 
 impl StateArgs {
@@ -709,7 +713,15 @@ impl Parse for SuperstateArgs {
 
 impl SubmachineArgs {
     /// The keys of `#[submachine]`.
-    const KEYS: &[&str] = &["machine", "field", "factory", "name", "superstate"];
+    const KEYS: &[&str] = &[
+        "machine",
+        "field",
+        "factory",
+        "name",
+        "superstate",
+        "entry_action",
+        "exit_action",
+    ];
 
     /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
@@ -725,8 +737,12 @@ impl SubmachineArgs {
             self.field = Some(ident);
         } else if key == "name" {
             self.name = Some(ident);
-        } else {
+        } else if key == "superstate" {
             self.superstate = Some(ident);
+        } else if key == "entry_action" {
+            self.entry_action = Some(ident);
+        } else {
+            self.exit_action = Some(ident);
         }
 
         Ok(())
@@ -1232,6 +1248,22 @@ mod tests {
         let factory = arguments.factory;
 
         assert_eq!(quote!(#factory).to_string(), "Self :: make_door");
+    }
+
+    #[test]
+    fn submachine_arguments_read_actions() {
+        let attribute: Attribute = parse_quote! {
+            #[submachine(machine = door::Door, field = door, entry_action = greet, exit_action = part)]
+        };
+
+        let Ok(Some(ItemAttribute::Submachine(arguments))) = parse_item_attribute(&attribute)
+        else {
+            panic!("the attribute should parse as a submachine");
+        };
+
+        assert!(arguments.entry_action.is_some_and(|name| name == "greet"));
+        assert!(arguments.exit_action.is_some_and(|name| name == "part"));
+        assert!(arguments.superstate.is_none());
     }
 
     #[test]

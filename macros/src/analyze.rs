@@ -158,6 +158,10 @@ pub(crate) struct MountModel {
     pub(crate) factory: Option<Path>,
     /// The handler name of the enclosing superstate or mount.
     pub(crate) superstate: Option<Ident>,
+    /// The action to run after the mounted machine is created.
+    pub(crate) entry_action: Option<Ident>,
+    /// The action to run before the mounted machine is released.
+    pub(crate) exit_action: Option<Ident>,
     /// The classified inputs of the mount handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
     /// The doc comments of the mount handler.
@@ -493,6 +497,7 @@ fn take_item_attribute(
 fn check_action_references(
     states: &[StateModel],
     superstates: &[SuperstateModel],
+    mounts: &[MountModel],
     actions: &[ActionModel],
     errors: &mut Option<syn::Error>,
 ) {
@@ -512,6 +517,11 @@ fn check_action_references(
     for superstate in superstates {
         check(&superstate.entry_action, "entry action not found");
         check(&superstate.exit_action, "exit action not found");
+    }
+
+    for mount in mounts {
+        check(&mount.entry_action, "entry action not found");
+        check(&mount.exit_action, "exit action not found");
     }
 }
 
@@ -942,6 +952,8 @@ fn analyze_mount(
         field,
         factory: arguments.factory,
         superstate: arguments.superstate,
+        entry_action: arguments.entry_action,
+        exit_action: arguments.exit_action,
         inputs,
         docs,
     }
@@ -1141,7 +1153,7 @@ fn check_links(
     actions: &[ActionModel],
     errors: &mut Option<syn::Error>,
 ) {
-    check_action_references(states, superstates, actions, errors);
+    check_action_references(states, superstates, mounts, actions, errors);
     check_superstate_references(states, superstates, mounts, errors);
     check_superstate_cycles(superstates, mounts, errors);
     check_superstate_fields(states, superstates, errors);
