@@ -50,6 +50,9 @@ pub(crate) struct MountIr {
     pub(crate) machine: Type,
     /// The field of the shared storage that holds the mounted machine.
     pub(crate) field: Ident,
+    /// The function that creates the mounted machine, or `None` to create it
+    /// with `Default`.
+    pub(crate) factory: Option<Path>,
     /// The type of the state variant's value, the child's state type.
     pub(crate) state_type: Type,
     /// The type of the superstate variant's value, a `SubmachineNode` over the
@@ -405,6 +408,7 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         constructor: mount.constructor.clone(),
         machine: mount.machine.clone(),
         field: mount.field.clone(),
+        factory: mount.factory.clone(),
         state_type: mount_state_type(mount),
         superstate_type: mount_superstate_type(mount),
         handler: lower_call(&mount.handler, &mount.inputs),

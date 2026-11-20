@@ -734,7 +734,7 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
     .map(|(method, actions)| {
         let mount_arms = mounts
             .iter()
-            .map(|mount| superstate_lifecycle_arms(name, mount, &method));
+            .map(|mount| superstate_lifecycle_arms(name, shared_storage, mount, &method));
 
         lifecycle_method(
             name,
@@ -1133,11 +1133,19 @@ fn state_lifecycle_arm(enum_name: &Ident, mount: &MountIr, method: &Ident) -> To
 /// after every node of the child, the child's actions always find its storage.
 /// A superstate of the child runs the same action of the child's superstate on
 /// the child's storage.
-fn superstate_lifecycle_arms(enum_name: &Ident, mount: &MountIr, method: &Ident) -> TokenStream {
+fn superstate_lifecycle_arms(
+    enum_name: &Ident,
+    shared_storage: &Type,
+    mount: &MountIr,
+    method: &Ident,
+) -> TokenStream {
     let variant = &mount.variant;
 
     let mount_node = if method == "call_entry_action" {
-        field_call(mount, "DefaultInstance", "fill_default")
+        match &mount.factory {
+            Some(factory) => factory_call(shared_storage, mount, factory),
+            None => field_call(mount, "DefaultInstance", "fill_default"),
+        }
     } else {
         field_call(mount, "MountField", "release")
     };
@@ -1147,6 +1155,53 @@ fn superstate_lifecycle_arms(enum_name: &Ident, mount: &MountIr, method: &Ident)
     quote! {
         #enum_name::#variant(::sotu::SubmachineNode::Mount) => #mount_node,
         #enum_name::#variant(::sotu::SubmachineNode::Inner(state)) => #child_action,
+    }
+}
+
+/// Generate the creation of the child through `factory` when the mount's
+/// instance field is vacant.
+///
+/// The field is checked before the factory borrows the whole shared storage,
+/// and a field that already holds an instance keeps it. Every token is
+/// spanned at the value of the `factory` key, so a persistent field is
+/// reported there.
+fn factory_call(shared_storage: &Type, mount: &MountIr, factory: &Path) -> TokenStream {
+    let MountIr { machine, field, .. } = mount;
+    let shared_storage_parameter = generated_ident("shared_storage");
+    let context = generated_ident("context");
+    let instance = generated_ident("instance");
+    let span = factory.span();
+    let factory = factory_path(shared_storage, factory);
+
+    quote_spanned! {span=>
+        if ::sotu::private::FactoryInstance::<#machine>::is_vacant(&#shared_storage_parameter.#field) {
+            let #instance = (#factory)(#shared_storage_parameter, #context);
+
+            ::sotu::private::FactoryInstance::<#machine>::install(
+                &mut #shared_storage_parameter.#field,
+                #instance,
+            );
+        }
+    }
+}
+
+/// Write `factory` so that it resolves outside the machine's impl block.
+///
+/// The generated call sits in an impl of a node enum, where `Self` names the
+/// enum, so a leading `Self` segment is replaced by the shared storage type.
+fn factory_path(shared_storage: &Type, factory: &Path) -> TokenStream {
+    let mut segments = factory.segments.iter();
+
+    match segments.next() {
+        Some(first) if factory.leading_colon.is_none() && first.ident == "Self" => {
+            let qualified = expression_path(shared_storage);
+            let rest = segments.map(|segment| quote_spanned!(segment.span()=> ::#segment));
+
+            quote_spanned! {first.span()=>
+                #qualified #(#rest)*
+            }
+        }
+        _ => factory.to_token_stream(),
     }
 }
 
