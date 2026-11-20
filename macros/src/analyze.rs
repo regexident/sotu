@@ -153,6 +153,9 @@ pub(crate) struct MountModel {
     pub(crate) machine: Type,
     /// The field of the shared storage that holds the mounted machine.
     pub(crate) field: Ident,
+    /// The function that creates the mounted machine, or `None` to create it
+    /// with `Default`.
+    pub(crate) factory: Option<Path>,
     /// The handler name of the enclosing superstate or mount.
     pub(crate) superstate: Option<Ident>,
     /// The classified inputs of the mount handler, in declaration order.
@@ -933,6 +936,7 @@ fn analyze_mount(
         constructor,
         machine,
         field,
+        factory: arguments.factory,
         superstate: arguments.superstate,
         inputs,
         docs,
