@@ -219,7 +219,7 @@ pub(crate) enum DefaultValue {
     Expr(Expr),
 }
 
-/// The names that classify the event and context inputs.
+/// The names that classify the event, context and `submachine` inputs.
 ///
 /// Classification is by name only, so a renamed input replaces the default
 /// name, which then classifies as local storage.
@@ -228,6 +228,8 @@ struct InputNames {
     event: Ident,
     /// The name of the context input.
     context: Ident,
+    /// The name of the input that borrows a mounted machine.
+    submachine: Ident,
 }
 
 /// The handlers and actions of an impl block, in declaration order.
@@ -274,6 +276,9 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         context: arguments
             .context_identifier
             .unwrap_or_else(|| Ident::new("context", Span::call_site())),
+        submachine: arguments
+            .submachine_identifier
+            .unwrap_or_else(|| Ident::new("submachine", Span::call_site())),
     };
 
     let (
@@ -729,8 +734,6 @@ fn check_inputs_by_reference(
 /// references are left to [`check_inputs_by_reference`], so that each input is
 /// reported once.
 fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Option<syn::Error>) {
-    let submachine = Ident::new("submachine", Span::call_site());
-
     for input in &function.sig.inputs {
         let FnArg::Typed(typed) = input else {
             continue;
@@ -739,7 +742,7 @@ fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Op
         let is_local_storage = local_storage_input(typed).is_some()
             && !is_named(typed, &names.event)
             && !is_named(typed, &names.context)
-            && !is_named(typed, &submachine);
+            && !is_named(typed, &names.submachine);
 
         if is_local_storage {
             push_error(
@@ -802,7 +805,6 @@ fn handler_inputs(
     errors: &mut Option<syn::Error>,
 ) -> Vec<InputKind> {
     let mut inputs = Vec::new();
-    let submachine = Ident::new("submachine", Span::call_site());
 
     for input in &mut function.sig.inputs {
         match input {
@@ -810,7 +812,9 @@ fn handler_inputs(
             FnArg::Typed(typed) if is_named(typed, &names.context) => {
                 inputs.push(InputKind::Context);
             }
-            FnArg::Typed(typed) if role == Role::Submachine && is_named(typed, &submachine) => {
+            FnArg::Typed(typed)
+                if role == Role::Submachine && is_named(typed, &names.submachine) =>
+            {
                 inputs.push(InputKind::Submachine);
             }
             FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
@@ -1455,6 +1459,7 @@ mod tests {
         InputNames {
             event: ident("event"),
             context: ident("context"),
+            submachine: ident("submachine"),
         }
     }
 
