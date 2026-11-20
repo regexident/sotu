@@ -602,6 +602,8 @@ pub(crate) struct SubmachineArgs {
     pub(crate) machine: Option<Type>,
     /// The field of the shared storage that holds the mounted machine.
     pub(crate) field: Option<Ident>,
+    /// The function that creates the mounted machine when its instance field is empty.
+    pub(crate) factory: Option<Path>,
     /// The name of the generated variants, replacing the one derived from the handler.
     pub(crate) name: Option<Ident>,
     /// The handler name of the enclosing superstate.
@@ -701,10 +703,16 @@ impl Parse for SuperstateArgs {
 
 impl SubmachineArgs {
     /// The keys of `#[submachine]`.
-    const KEYS: &[&str] = &["machine", "field", "name", "superstate"];
+    const KEYS: &[&str] = &["machine", "field", "factory", "name", "superstate"];
 
-    /// Store the `key = ident` argument `key`.
+    /// Store the `key = value` argument `key`.
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
+        if key == "factory" {
+            self.factory = Some(path_value(value)?);
+
+            return Ok(());
+        }
+
         let ident = ident_value(value)?;
 
         if key == "field" {
@@ -1202,6 +1210,22 @@ mod tests {
         assert!(arguments.field.is_some_and(|name| name == "door"));
         assert!(arguments.name.is_some_and(|name| name == "Loading"));
         assert!(arguments.superstate.is_some_and(|name| name == "group"));
+    }
+
+    #[test]
+    fn submachine_arguments_read_factory() {
+        let attribute: Attribute = parse_quote! {
+            #[submachine(machine = door::Door, field = door, factory = Self::make_door)]
+        };
+
+        let Ok(Some(ItemAttribute::Submachine(arguments))) = parse_item_attribute(&attribute)
+        else {
+            panic!("the attribute should parse as a submachine");
+        };
+
+        let factory = arguments.factory;
+
+        assert_eq!(quote!(#factory).to_string(), "Self :: make_door");
     }
 
     #[test]

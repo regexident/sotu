@@ -240,3 +240,33 @@ impl<C: Default> DefaultInstance<C> for Option<C> {
         }
     }
 }
+
+/// Creation of a submachine `C` through a factory in the parent field that
+/// stores it.
+///
+/// A mount node with a factory fills its field through this trait on entry,
+/// calling the factory only while the field is vacant. Only instance fields
+/// of type `Option<C>` implement it, since a persistent field of type `C`
+/// already holds its child and is never created by the machine.
+#[diagnostic::on_unimplemented(
+    message = "`factory` requires an `Option<{C}>` field",
+    note = "a `{C}` field is never created by the machine"
+)]
+pub trait FactoryInstance<C> {
+    /// Return whether the field holds no instance, so that entering the mount
+    /// node calls the factory.
+    fn is_vacant(&self) -> bool;
+
+    /// Store `instance`, created by the factory, in the field.
+    fn install(&mut self, instance: C);
+}
+
+impl<C> FactoryInstance<C> for Option<C> {
+    fn is_vacant(&self) -> bool {
+        self.is_none()
+    }
+
+    fn install(&mut self, instance: C) {
+        *self = Some(instance);
+    }
+}
