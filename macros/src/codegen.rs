@@ -1269,20 +1269,55 @@ fn factory_path(shared_storage: &Type, factory: &Path) -> TokenStream {
 }
 
 /// Generate the call of the child's action `method` through `child_trait` on
-/// the node bound as `state`, with the child's storage and the parent's
-/// context.
+/// the node bound as `state`, with the child's storage and context.
 ///
 /// The storage is absent only when user code emptied an active instance
 /// field, and the action is then skipped.
 fn child_action(mount: &MountIr, child_trait: &TokenStream, method: &Ident) -> TokenStream {
     let submachine = generated_ident("submachine");
-    let context = generated_ident("context");
     let storage = field_call(mount, "MountField", "get_mut");
+
+    let call = child_context_call(
+        mount,
+        |context| quote!(#child_trait::#method(state, #submachine, #context)),
+    );
 
     quote! {
         if let ::core::option::Option::Some(#submachine) = #storage {
-            #child_trait::#method(state, #submachine, #context);
+            #call;
         }
+    }
+}
+
+/// Generate the callback into the child of `mount` that `call` builds from
+/// the expression of the child's context.
+///
+/// Without a `context` mapping the parent's context is passed through. With
+/// one, the mapping builds the child's context from the parent's for this
+/// callback alone, and the child's context is dropped when the callback
+/// returns, so its borrow of the parent's context ends before any parent hook
+/// or later callback runs. The mapping is spanned at the value of the
+/// `context` key, so a mapping of the wrong type is reported there.
+fn child_context_call(
+    mount: &MountIr,
+    call: impl FnOnce(&TokenStream) -> TokenStream,
+) -> TokenStream {
+    let context = generated_ident("context");
+
+    match &mount.context {
+        Some(mapping) => {
+            let child_context = generated_ident("child_context");
+            let call = call(&quote!(&mut #child_context));
+
+            quote_spanned! {mapping.span()=>
+                {
+                    let mut #child_context = (#mapping)(#context);
+
+                    #call
+                }
+            }
+        }
+        None => call(&context.to_token_stream()),
     }
 }
 
@@ -1463,10 +1498,36 @@ fn dispatch_arm_into_child(
     let field = &mount.field;
     let shared_storage = generated_ident("shared_storage");
     let event = generated_ident("event");
-    let ctx = generated_ident("context");
     let submachine = generated_ident("submachine");
     let outcome = generated_ident("outcome");
     let lifted = lifted_outcome(context.state_name, mount, &outcome);
+
+    let before_dispatch = child_context_call(mount, |context| {
+        quote! {
+            <#machine as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+                #submachine,
+                #child_node,
+                &#event,
+                #context,
+            )
+        }
+    });
+
+    let dispatch = child_context_call(
+        mount,
+        |context| quote!(#child_trait::__dispatch(node, #submachine, #event, #context)),
+    );
+
+    let after_dispatch = child_context_call(mount, |context| {
+        quote! {
+            <#machine as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+                #submachine,
+                #child_node,
+                &event,
+                #context,
+            )
+        }
+    });
 
     let storage_access = quote_spanned! {field.span()=>
         ::sotu::private::MountField::<#machine>::get_mut(&mut #shared_storage.#field)
@@ -1484,22 +1545,11 @@ fn dispatch_arm_into_child(
             };
 
             let visited = #storage::#projection(#event, |#event| {
-                <#machine as ::sotu::blocking::IntoStateMachine>::before_dispatch(
-                    #submachine,
-                    #child_node,
-                    &#event,
-                    #ctx,
-                );
+                #before_dispatch;
 
-                let ::sotu::private::Dispatched { outcome, event } =
-                    #child_trait::__dispatch(node, #submachine, #event, #ctx);
+                let ::sotu::private::Dispatched { outcome, event } = #dispatch;
 
-                <#machine as ::sotu::blocking::IntoStateMachine>::after_dispatch(
-                    #submachine,
-                    #child_node,
-                    &event,
-                    #ctx,
-                );
+                #after_dispatch;
 
                 (outcome, event)
             });
@@ -1758,6 +1808,30 @@ fn internal_transition_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> Tok
             let child_extension = child_extension(machine);
             let storage = field_call(mount, "MountField", "get_mut");
 
+            let hook_call = child_context_call(mount, |context| {
+                quote! {
+                    <#machine as ::sotu::blocking::IntoStateMachine>::#hook(
+                        #submachine,
+                        source,
+                        #target,
+                        #context,
+                    )
+                }
+            });
+
+            let deeper_call = child_context_call(mount, |context| {
+                quote! {
+                    #child_state::#method(
+                        source,
+                        #target,
+                        #exit_levels,
+                        deeper,
+                        #submachine,
+                        #context,
+                    )
+                }
+            });
+
             quote! {
                 (#name::#variant(source), #name::#variant(#target)) => {
                     if #exit_levels > #child_extension::depth(source) {
@@ -1770,22 +1844,10 @@ fn internal_transition_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> Tok
 
                     match #nesting.checked_sub(1) {
                         ::core::option::Option::Some(0) => {
-                            <#machine as ::sotu::blocking::IntoStateMachine>::#hook(
-                                #submachine,
-                                source,
-                                #target,
-                                #context,
-                            );
+                            #hook_call;
                         }
                         ::core::option::Option::Some(deeper) => {
-                            #child_state::#method(
-                                source,
-                                #target,
-                                #exit_levels,
-                                deeper,
-                                #submachine,
-                                #context,
-                            );
+                            #deeper_call;
                         }
                         ::core::option::Option::None => {}
                     }
