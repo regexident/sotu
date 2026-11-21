@@ -142,6 +142,175 @@ mod house {
     }
 }
 
+mod inner {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    /// A grandchild that exits on `Finish`.
+    pub struct Inner;
+
+    impl Default for Inner {
+        fn default() -> Self {
+            trace::record("inner created");
+
+            Self
+        }
+    }
+
+    impl Drop for Inner {
+        fn drop(&mut self) {
+            trace::record("inner dropped");
+        }
+    }
+
+    pub struct Finish;
+
+    #[derive(Event)]
+    pub enum Event {
+        Finish(Finish),
+    }
+
+    pub struct Finished;
+
+    #[state_machine(initial = State::running(), exit = Finished)]
+    impl Inner {
+        #[state(exit_action = exit_running)]
+        fn running(event: &Event) -> Outcome<State, Finished> {
+            match event {
+                Event::Finish(_) => Exit(Finished),
+            }
+        }
+
+        #[action]
+        fn exit_running() {
+            trace::record("exit running");
+        }
+    }
+}
+
+mod outer {
+    use sotu::prelude::*;
+
+    use super::{inner, trace};
+
+    /// A child that mounts the inner machine and answers its exit with its
+    /// own exit.
+    pub struct Outer {
+        pub inner: Option<inner::Inner>,
+    }
+
+    impl Default for Outer {
+        fn default() -> Self {
+            trace::record("outer created");
+
+            Self { inner: None }
+        }
+    }
+
+    impl Drop for Outer {
+        fn drop(&mut self) {
+            trace::record("outer dropped");
+        }
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Finish(inner::Finish),
+    }
+
+    pub struct Finished;
+
+    #[state_machine(initial = Superstate::working(), exit = Finished)]
+    impl Outer {
+        #[submachine(
+            machine = inner::Inner,
+            field = inner,
+            exit_action = exit_working,
+            exit_handler = inner_exited
+        )]
+        fn working(event: &Event) -> Outcome<State, Finished> {
+            match event {
+                Event::Finish(_) => Super,
+            }
+        }
+
+        #[exit_handler]
+        fn inner_exited(exit: inner::Finished) -> Outcome<State, Finished> {
+            let inner::Finished = exit;
+
+            Exit(Finished)
+        }
+
+        #[action]
+        fn exit_working() {
+            trace::record("exit working");
+        }
+    }
+}
+
+mod plant {
+    use sotu::prelude::*;
+
+    use super::{inner, outer, trace};
+
+    #[derive(Debug, PartialEq)]
+    pub enum RootExit {
+        Done,
+    }
+
+    /// A root that mounts the outer machine and terminates when it exits.
+    #[derive(Default)]
+    pub struct Plant {
+        pub outer: Option<outer::Outer>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Finish(inner::Finish),
+    }
+
+    #[state_machine(
+        initial = Superstate::operating(),
+        exit = RootExit,
+        before_transition = Self::before_transition,
+        after_transition = Self::after_transition
+    )]
+    impl Plant {
+        fn before_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("root before transition");
+        }
+
+        fn after_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("root after transition");
+        }
+
+        #[submachine(
+            machine = outer::Outer,
+            field = outer,
+            exit_action = exit_operating,
+            exit_handler = outer_exited
+        )]
+        fn operating(event: &Event) -> Outcome<State, RootExit> {
+            match event {
+                Event::Finish(_) => Super,
+            }
+        }
+
+        #[exit_handler]
+        fn outer_exited(exit: outer::Finished) -> Outcome<State, RootExit> {
+            let outer::Finished = exit;
+
+            Exit(RootExit::Done)
+        }
+
+        #[action]
+        fn exit_operating() {
+            trace::record("exit operating");
+        }
+    }
+}
+
 /// Return an initialized `House` with the door in `opened`, with an empty
 /// trace.
 fn opened_house() -> InitializedStateMachine<house::House> {
@@ -153,6 +322,24 @@ fn opened_house() -> InitializedStateMachine<house::House> {
         trace::take(),
         ["enter group", "door created", "enter frame", "enter opened"]
     );
+
+    machine
+}
+
+/// Return an initialized `Plant` that the inner machine has terminated, with
+/// an empty trace.
+fn terminated_plant() -> InitializedStateMachine<plant::Plant> {
+    let mut machine = plant::Plant::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    assert_eq!(trace::take(), ["outer created", "inner created"]);
+    assert_eq!(
+        machine.handle(inner::Finish, &mut ()),
+        Some(&plant::RootExit::Done)
+    );
+
+    trace::take();
 
     machine
 }
@@ -243,5 +430,44 @@ fn child_internal_external_transition_keeps_instance() {
     assert!(matches!(
         machine.state(),
         house::State::Loading(door::State::Closed {})
+    ));
+}
+
+#[test]
+fn root_termination_from_nested_mount_resets_fields() {
+    let mut machine = plant::Plant::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    trace::take();
+
+    assert_eq!(
+        machine.handle(inner::Finish, &mut ()),
+        Some(&plant::RootExit::Done)
+    );
+    assert_eq!(
+        trace::take(),
+        [
+            "exit running",
+            "exit working",
+            "inner dropped",
+            "exit operating",
+            "outer dropped",
+        ]
+    );
+    assert!(machine.outer.is_none());
+}
+
+#[test]
+fn restart_after_termination_creates_fresh_instances() {
+    let mut machine = terminated_plant();
+
+    machine.restart(&mut ());
+
+    assert_eq!(trace::take(), ["outer created", "inner created"]);
+    assert!(!machine.is_terminated());
+    assert!(matches!(
+        machine.state(),
+        plant::State::Operating(outer::State::Working(inner::State::Running {}))
     ));
 }
