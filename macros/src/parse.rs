@@ -139,6 +139,9 @@ pub(crate) struct MachineArgs {
     pub(crate) context_identifier: Option<Ident>,
     /// The name of the input that borrows a mounted machine, replacing `submachine`.
     pub(crate) submachine_identifier: Option<Ident>,
+    /// The name of the exit handler input that receives a mounted machine's
+    /// exit value, replacing `exit`.
+    pub(crate) exit_identifier: Option<Ident>,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit: Option<Type>,
     /// The function called just before a node handles an event.
@@ -196,6 +199,7 @@ impl MachineArgs {
         "event_identifier",
         "context_identifier",
         "submachine_identifier",
+        "exit_identifier",
         "exit",
         "before_dispatch",
         "after_dispatch",
@@ -299,6 +303,8 @@ impl MachineArgs {
             self.event_identifier = Some(ident);
         } else if key == "submachine_identifier" {
             self.submachine_identifier = Some(ident);
+        } else if key == "exit_identifier" {
+            self.exit_identifier = Some(ident);
         } else {
             self.context_identifier = Some(ident);
         }
@@ -315,6 +321,7 @@ impl Parse for MachineArgs {
             event_identifier: None,
             context_identifier: None,
             submachine_identifier: None,
+            exit_identifier: None,
             exit: None,
             before_dispatch: None,
             after_dispatch: None,
@@ -567,6 +574,8 @@ pub(crate) enum ItemAttribute {
     Submachine(SubmachineArgs),
     /// The item is an entry or exit action.
     Action,
+    /// The item is the exit handler of a mounted submachine.
+    ExitHandler,
 }
 
 /// The arguments of `#[state]`.
@@ -620,6 +629,8 @@ pub(crate) struct SubmachineArgs {
     pub(crate) entry_action: Option<Ident>,
     /// The action to run before the mounted machine is released.
     pub(crate) exit_action: Option<Ident>,
+    /// The exit handler that receives the mounted machine's exit values.
+    pub(crate) exit_handler: Option<Ident>,
 }
 
 impl StateArgs {
@@ -724,6 +735,7 @@ impl SubmachineArgs {
         "superstate",
         "entry_action",
         "exit_action",
+        "exit_handler",
     ];
 
     /// Store the `key = value` argument `key`.
@@ -750,6 +762,8 @@ impl SubmachineArgs {
             self.superstate = Some(ident);
         } else if key == "entry_action" {
             self.entry_action = Some(ident);
+        } else if key == "exit_handler" {
+            self.exit_handler = Some(ident);
         } else {
             self.exit_action = Some(ident);
         }
@@ -952,13 +966,12 @@ pub(crate) fn parse_item_attribute(attribute: &Attribute) -> syn::Result<Option<
         }
         "superstate" => parse_superstate_args(attribute)
             .map(|arguments| Some(ItemAttribute::Superstate(arguments))),
-        "action" => parse_action_args(attribute).map(|()| Some(ItemAttribute::Action)),
+        "action" => parse_bare_args(attribute, &name).map(|()| Some(ItemAttribute::Action)),
         "submachine" => parse_submachine_args(attribute)
             .map(|arguments| Some(ItemAttribute::Submachine(arguments))),
-        "exit_handler" => Err(syn::Error::new_spanned(
-            attribute,
-            format!("`#[{name}]` is not supported here"),
-        )),
+        "exit_handler" => {
+            parse_bare_args(attribute, &name).map(|()| Some(ItemAttribute::ExitHandler))
+        }
         _ => Ok(None),
     }
 }
@@ -996,7 +1009,8 @@ fn parse_submachine_args(attribute: &Attribute) -> syn::Result<SubmachineArgs> {
     }
 }
 
-fn parse_action_args(attribute: &Attribute) -> syn::Result<()> {
+/// Check that the attribute `#[name]`, which takes no arguments, has none.
+fn parse_bare_args(attribute: &Attribute, name: &str) -> syn::Result<()> {
     match &attribute.meta {
         Meta::Path(_) => Ok(()),
         Meta::List(list) => list
@@ -1004,7 +1018,7 @@ fn parse_action_args(attribute: &Attribute) -> syn::Result<()> {
             .map(|_| ()),
         Meta::NameValue(name_value) => Err(syn::Error::new_spanned(
             name_value,
-            "`#[action]` takes no value",
+            format!("`#[{name}]` takes no value"),
         )),
     }
 }
@@ -1312,6 +1326,42 @@ mod tests {
             parse_item_attribute(&attribute),
             Ok(Some(ItemAttribute::Action))
         ));
+    }
+
+    #[test]
+    fn exit_handler_attribute_accepts_no_arguments() {
+        let bare: Attribute = parse_quote!(#[exit_handler]);
+        let empty: Attribute = parse_quote!(#[exit_handler()]);
+        let valued: Attribute = parse_quote!(#[exit_handler(on = done)]);
+
+        assert!(matches!(
+            parse_item_attribute(&bare),
+            Ok(Some(ItemAttribute::ExitHandler))
+        ));
+        assert!(matches!(
+            parse_item_attribute(&empty),
+            Ok(Some(ItemAttribute::ExitHandler))
+        ));
+
+        let message = match parse_item_attribute(&valued) {
+            Ok(_) => panic!("`#[exit_handler(on = done)]` should be rejected"),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(
+            message,
+            "unknown argument `on`; this attribute takes no arguments"
+        );
+    }
+
+    #[test]
+    fn machine_arguments_read_exit_identifier() {
+        let arguments: MachineArgs =
+            syn::parse_str("initial = State::a(), exit_identifier = done").unwrap();
+
+        assert!(arguments.exit_identifier.is_some_and(|name| name == "done"));
+        assert!(arguments.submachine_identifier.is_none());
+        assert!(arguments.context_identifier.is_none());
     }
 
     #[test]

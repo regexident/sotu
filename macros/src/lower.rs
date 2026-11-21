@@ -71,6 +71,9 @@ pub(crate) struct MountIr {
     /// The action to run after the child's exit actions, before the instance
     /// is released.
     pub(crate) exit_action: Option<MountActionIr>,
+    /// The exit handler that answers an exit of the child with an outcome of
+    /// the parent, or `None` if the child can not exit.
+    pub(crate) exit_handler: Option<MountActionIr>,
     /// The hidden associated function of the shared storage that projects a
     /// parent event into the child's event type for the duration of a visit.
     pub(crate) projection: Ident,
@@ -78,11 +81,11 @@ pub(crate) struct MountIr {
     pub(crate) parent: Option<ParentIr>,
 }
 
-/// A call of an action attached to a mount.
+/// A call of an action or exit handler attached to a mount.
 pub(crate) struct MountActionIr {
-    /// The call to the action.
+    /// The call to the action or exit handler.
     pub(crate) call: CallIr,
-    /// Whether the action takes the `submachine` input.
+    /// Whether the action or exit handler takes the `submachine` input.
     pub(crate) takes_submachine: bool,
 }
 
@@ -348,6 +351,7 @@ const SHARED_STORAGE: &str = "shared_storage";
 const EVENT: &str = "event";
 const CONTEXT: &str = "context";
 const SUBMACHINE: &str = "submachine";
+const EXIT: &str = "exit";
 
 /// Resolve `model` into the [`Ir`] that code generation reads.
 pub(crate) fn lower(model: &Model) -> Ir {
@@ -433,6 +437,7 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         takes_submachine: mount.inputs.contains(&InputKind::Submachine),
         entry_action: lower_mount_action(&model.actions, mount.entry_action.as_ref()),
         exit_action: lower_mount_action(&model.actions, mount.exit_action.as_ref()),
+        exit_handler: lower_exit_handler(model, mount.exit_handler.as_ref()),
         projection: format_ident!("__project_into_{}", mount.constructor),
         parent: parent.map(|parent| lower_parent(parent, |_| None)),
     }
@@ -447,6 +452,22 @@ fn lower_mount_action(actions: &[ActionModel], name: Option<&Ident>) -> Option<M
     Some(MountActionIr {
         call: lower_call(&action.name, &action.inputs),
         takes_submachine: action.inputs.contains(&InputKind::Submachine),
+    })
+}
+
+/// Lower the call of the exit handler that `name` names, or `None` without a
+/// name.
+fn lower_exit_handler(model: &Model, name: Option<&Ident>) -> Option<MountActionIr> {
+    let name = name?;
+
+    let exit_handler = model
+        .exit_handlers
+        .iter()
+        .find(|exit_handler| exit_handler.name == *name)?;
+
+    Some(MountActionIr {
+        call: lower_call(&exit_handler.name, &exit_handler.inputs),
+        takes_submachine: exit_handler.inputs.contains(&InputKind::Submachine),
     })
 }
 
@@ -1016,9 +1037,11 @@ fn lower_pattern(variant: &Ident, fields: &[FieldModel], inputs: &[InputKind]) -
         .iter()
         .filter_map(|input| match input {
             InputKind::LocalStorage { name, .. } => Some(name.clone()),
-            InputKind::Receiver | InputKind::Event | InputKind::Context | InputKind::Submachine => {
-                None
-            }
+            InputKind::Receiver
+            | InputKind::Event
+            | InputKind::Context
+            | InputKind::Submachine
+            | InputKind::Exit => None,
         })
         .collect();
 
@@ -1042,6 +1065,7 @@ fn argument(input: &InputKind) -> Ident {
         InputKind::Event => generated_ident(EVENT),
         InputKind::Context => generated_ident(CONTEXT),
         InputKind::Submachine => generated_ident(SUBMACHINE),
+        InputKind::Exit => generated_ident(EXIT),
         InputKind::LocalStorage { name, .. } => name.clone(),
     }
 }

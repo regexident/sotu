@@ -43,6 +43,13 @@ pub(crate) struct Model {
         expect(dead_code, reason = "generated parameters have fixed names")
     )]
     pub(crate) submachine_identifier: Ident,
+    /// The name of the exit handler input that receives a mounted machine's
+    /// exit value.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "generated parameters have fixed names")
+    )]
+    pub(crate) exit_identifier: Ident,
     /// The type of the exit points through which the machine can be left.
     pub(crate) exit_type: Type,
     /// Whether `#[state_machine]` declares the exit type with `exit = Type`.
@@ -57,6 +64,8 @@ pub(crate) struct Model {
     pub(crate) mounts: Vec<MountModel>,
     /// The entry and exit actions in declaration order.
     pub(crate) actions: Vec<ActionModel>,
+    /// The exit handlers in declaration order.
+    pub(crate) exit_handlers: Vec<ExitHandlerModel>,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
     /// The generics and where-clause of the impl block, which every generated
@@ -172,6 +181,9 @@ pub(crate) struct MountModel {
     pub(crate) entry_action: Option<Ident>,
     /// The action to run before the mounted machine is released.
     pub(crate) exit_action: Option<Ident>,
+    /// The exit handler that receives the mounted machine's exit values, or
+    /// `None` if the mounted machine can not exit.
+    pub(crate) exit_handler: Option<Ident>,
     /// The classified inputs of the mount handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
     /// The doc comments of the mount handler.
@@ -196,6 +208,15 @@ pub(crate) struct ActionModel {
     pub(crate) inputs: Vec<InputKind>,
 }
 
+/// An exit handler of the machine, which answers a mounted machine's exit
+/// value with an outcome of the machine.
+pub(crate) struct ExitHandlerModel {
+    /// The name of the exit handler function.
+    pub(crate) name: Ident,
+    /// The classified inputs of the exit handler, in declaration order.
+    pub(crate) inputs: Vec<InputKind>,
+}
+
 /// What an input of a handler or action receives.
 // Inputs live in short vectors for the duration of one macro expansion, so the
 // size of the largest variant does not justify boxing the syntax trees.
@@ -212,6 +233,9 @@ pub(crate) enum InputKind {
     /// the storage of the mounted machine. It is named `submachine` unless
     /// `submachine_identifier` renames it.
     Submachine,
+    /// The exit value of a mounted machine, which an exit handler takes by
+    /// value. It is named `exit` unless `exit_identifier` renames it.
+    Exit,
     /// A reference to the local storage field called `name`.
     LocalStorage {
         /// The name of the field.
@@ -234,7 +258,7 @@ pub(crate) enum DefaultValue {
     Expr(Expr),
 }
 
-/// The names that classify the event, context and `submachine` inputs.
+/// The names that classify the event, context, `submachine` and exit inputs.
 ///
 /// Classification is by name only, so a renamed input replaces the default
 /// name, which then classifies as local storage.
@@ -245,10 +269,13 @@ struct InputNames {
     context: Ident,
     /// The name of the input that borrows a mounted machine.
     submachine: Ident,
+    /// The name of the exit handler input that receives a mounted machine's
+    /// exit value.
+    exit: Ident,
 }
 
 /// A function that a mount calls with access to its instance: the mount
-/// handler or one of the mount's actions.
+/// handler, one of the mount's actions or its exit handler.
 struct Attachment {
     /// The name of the function.
     function: Ident,
@@ -267,6 +294,8 @@ struct Nodes {
     mounts: Vec<MountModel>,
     /// The entry and exit actions.
     actions: Vec<ActionModel>,
+    /// The exit handlers.
+    exit_handlers: Vec<ExitHandlerModel>,
     /// The type behind the first event input.
     event_type: Option<Type>,
     /// The context inputs of the handlers and actions.
@@ -304,6 +333,9 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         submachine: arguments
             .submachine_identifier
             .unwrap_or_else(|| Ident::new("submachine", Span::call_site())),
+        exit: arguments
+            .exit_identifier
+            .unwrap_or_else(|| Ident::new("exit", Span::call_site())),
     };
 
     let (
@@ -312,6 +344,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             superstates,
             mounts,
             actions,
+            exit_handlers,
             event_type,
             context_inputs,
         },
@@ -348,6 +381,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         event_identifier: names.event,
         context_identifier: names.context,
         submachine_identifier: names.submachine,
+        exit_identifier: names.exit,
         declares_exit: arguments.exit.is_some(),
         exit_type: arguments
             .exit
@@ -362,6 +396,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         superstates,
         mounts,
         actions,
+        exit_handlers,
         generics: item.generics.clone(),
         item,
         visibility: arguments.visibility.unwrap_or_else(|| parse_quote!(pub)),
@@ -394,18 +429,20 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut superstates = Vec::new();
     let mut mounts = Vec::new();
     let mut actions = Vec::new();
+    let mut exit_handlers = Vec::new();
     let mut event_type = None;
     let mut context_inputs = Vec::new();
 
-    // Whether an action may take `submachine` depends on the mount that names
-    // it, which may come after the action, so every attribute is taken first.
+    // Whether an action or exit handler may take `submachine` depends on the
+    // mount that names it, which may come after the function, so every
+    // attribute is taken first.
     let taken: Vec<Option<(ItemAttribute, Attribute)>> = item
         .items
         .iter_mut()
         .map(|impl_item| take_item_attribute(impl_item, &mut errors))
         .collect();
 
-    let mount_actions = mount_actions(&taken);
+    let attachments = mount_attachments(&taken);
 
     for (impl_item, taken) in item.items.iter_mut().zip(taken) {
         let Some((attribute, source)) = taken else {
@@ -460,12 +497,26 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 ));
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
-                let attachment = mount_actions
+                let attachment = attachments
                     .iter()
                     .find(|attachment| attachment.function == function.sig.ident);
 
                 check_signature(function, Role::Action, names, attachment, &mut errors);
                 actions.push(analyze_action(function, names, attachment.is_some()));
+            }
+            (ItemAttribute::ExitHandler, ImplItem::Fn(function)) => {
+                let attachment = attachments
+                    .iter()
+                    .find(|attachment| attachment.function == function.sig.ident);
+
+                if let Some(Attachment {
+                    field: Some(field), ..
+                }) = attachment
+                {
+                    check_receiver_and_submachine(function, field, names, &mut errors);
+                }
+
+                exit_handlers.push(analyze_exit_handler(function, names));
             }
             (ItemAttribute::State(_), _) => push_error(
                 &mut errors,
@@ -492,6 +543,13 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     "`#[action]` can only be applied to functions",
                 ),
             ),
+            (ItemAttribute::ExitHandler, _) => push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &*impl_item,
+                    "`#[exit_handler]` can only be applied to functions",
+                ),
+            ),
         }
     }
 
@@ -500,6 +558,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
         superstates,
         mounts,
         actions,
+        exit_handlers,
         event_type,
         context_inputs,
     };
@@ -507,9 +566,9 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     (nodes, errors)
 }
 
-/// Return the actions that the mounts among `taken` attach, each with the field
-/// of its mount.
-fn mount_actions(taken: &[Option<(ItemAttribute, Attribute)>]) -> Vec<Attachment> {
+/// Return the actions and exit handlers that the mounts among `taken` attach,
+/// each with the field of its mount.
+fn mount_attachments(taken: &[Option<(ItemAttribute, Attribute)>]) -> Vec<Attachment> {
     let mut attachments = Vec::new();
 
     for (attribute, _) in taken.iter().flatten() {
@@ -517,11 +576,15 @@ fn mount_actions(taken: &[Option<(ItemAttribute, Attribute)>]) -> Vec<Attachment
             continue;
         };
 
-        let actions = [&arguments.entry_action, &arguments.exit_action];
+        let functions = [
+            &arguments.entry_action,
+            &arguments.exit_action,
+            &arguments.exit_handler,
+        ];
 
-        for action in actions.into_iter().flatten() {
+        for function in functions.into_iter().flatten() {
             attachments.push(Attachment {
-                function: action.clone(),
+                function: function.clone(),
                 field: arguments.field.clone(),
             });
         }
@@ -1082,6 +1145,7 @@ fn analyze_mount(
         superstate: arguments.superstate,
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
+        exit_handler: arguments.exit_handler,
         inputs,
         docs,
     }
@@ -1197,6 +1261,48 @@ fn analyze_action(function: &ImplItemFn, names: &InputNames, attached: bool) -> 
     }
 }
 
+/// Classify the inputs of the exit handler `function`.
+///
+/// An exit handler takes the mounted machine's exit value by value, so the
+/// input of the exit identifier is classified by name alone. The `submachine`
+/// input is classified whether or not a mount names the exit handler, since
+/// every exit handler belongs to a mount. Inputs that are neither of these,
+/// the receiver nor the context are classified as local storage when they are
+/// references and skipped otherwise.
+fn analyze_exit_handler(function: &ImplItemFn, names: &InputNames) -> ExitHandlerModel {
+    let mut inputs = Vec::new();
+
+    for input in &function.sig.inputs {
+        match input {
+            FnArg::Receiver(_) => inputs.push(InputKind::Receiver),
+            FnArg::Typed(typed) if is_named(typed, &names.context) => {
+                inputs.push(InputKind::Context);
+            }
+            FnArg::Typed(typed) if is_named(typed, &names.submachine) => {
+                inputs.push(InputKind::Submachine);
+            }
+            FnArg::Typed(typed) if is_named(typed, &names.exit) => {
+                inputs.push(InputKind::Exit);
+            }
+            FnArg::Typed(typed) => {
+                if let Some((name, ty, mutable)) = local_storage_input(typed) {
+                    inputs.push(InputKind::LocalStorage {
+                        name,
+                        ty,
+                        mutable,
+                        default: None,
+                    });
+                }
+            }
+        }
+    }
+
+    ExitHandlerModel {
+        name: function.sig.ident.clone(),
+        inputs,
+    }
+}
+
 /// Return the field name, field type and mutability of the local storage input `typed`.
 ///
 /// Returns `None` unless `typed` is a plain identifier bound to a reference.
@@ -1255,7 +1361,11 @@ fn input_field(input: &InputKind) -> Option<FieldModel> {
             ty: ty.clone(),
             default: default.clone(),
         }),
-        InputKind::Receiver | InputKind::Event | InputKind::Context | InputKind::Submachine => None,
+        InputKind::Receiver
+        | InputKind::Event
+        | InputKind::Context
+        | InputKind::Submachine
+        | InputKind::Exit => None,
     }
 }
 
@@ -1606,6 +1716,7 @@ mod tests {
             event: ident("event"),
             context: ident("context"),
             submachine: ident("submachine"),
+            exit: ident("exit"),
         }
     }
 
@@ -2516,6 +2627,128 @@ mod tests {
         };
 
         assert_eq!(message, "exit action not found");
+    }
+
+    #[test]
+    fn exit_handler_inputs_are_classified() {
+        let nodes = nodes(parse_quote! {
+            impl Washer {
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[exit_handler]
+                fn door_exited(&mut self, exit: DoorExit, context: &mut ()) -> Outcome<State> {
+                    Handled
+                }
+
+                #[state]
+                fn idle(exit: &u8) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let [exit_handler] = nodes.exit_handlers.as_slice() else {
+            panic!("the machine should have one exit handler");
+        };
+
+        assert_eq!(exit_handler.name, ident("door_exited"));
+        assert_eq!(
+            exit_handler.inputs,
+            [InputKind::Receiver, InputKind::Exit, InputKind::Context]
+        );
+        assert!(matches!(
+            nodes.states[0].inputs.as_slice(),
+            [InputKind::LocalStorage { name, .. }] if *name == "exit"
+        ));
+
+        let arguments: MachineArgs =
+            syn::parse_str("initial = State::idle(), exit_identifier = done").unwrap();
+
+        let item: ItemImpl = parse_quote! {
+            impl Washer {
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[exit_handler]
+                fn door_exited(done: DoorExit, exit: &u8) -> Outcome<State> {
+                    Handled
+                }
+            }
+        };
+
+        let model = match analyze(arguments, item) {
+            Ok(model) => model,
+            Err(error) => panic!("analysis failed: {error}"),
+        };
+
+        assert_eq!(model.exit_identifier, ident("done"));
+        assert!(matches!(
+            model.exit_handlers[0].inputs.as_slice(),
+            [InputKind::Exit, InputKind::LocalStorage { name, .. }] if *name == "exit"
+        ));
+    }
+
+    #[test]
+    fn mount_references_exit_handler() {
+        let model = model(parse_quote! {
+            impl Washer {
+                #[exit_handler]
+                fn door_exited(submachine: &mut door::Door, exit: DoorExit) -> Outcome<State> {
+                    Handled
+                }
+
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading(event: &Event) -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare)]
+                fn spare(event: &Event) -> Outcome<State> {
+                    Super
+                }
+            }
+        });
+
+        assert_eq!(model.mounts[0].exit_handler, Some(ident("door_exited")));
+        assert_eq!(model.mounts[1].exit_handler, None);
+        assert_eq!(model.exit_handlers[0].name, ident("door_exited"));
+        assert_eq!(
+            model.exit_handlers[0].inputs,
+            [InputKind::Submachine, InputKind::Exit]
+        );
+        assert_eq!(model.exit_identifier, ident("exit"));
+
+        let (_, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl Washer {
+                    #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                    fn loading(event: &Event) -> Outcome<State> {
+                        Super
+                    }
+
+                    #[exit_handler]
+                    fn door_exited(&mut self, submachine: &mut door::Door, exit: DoorExit)
+                        -> Outcome<State>
+                    {
+                        Handled
+                    }
+                }
+            },
+            &names(),
+        );
+
+        assert_eq!(
+            messages(errors),
+            [
+                "`submachine` borrows field `door` of `self`; take either a receiver or \
+                 `submachine`, not both"
+            ]
+        );
     }
 
     #[test]

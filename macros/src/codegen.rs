@@ -671,9 +671,11 @@ fn with_mount_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
 
         // Without an exit handler, the parent has nowhere to route an exit of
         // the child, so the child must not be able to exit.
-        predicates.push(parse_quote_spanned! {machine.span()=>
-            #machine: ::sotu::private::ExitlessSubmachine
-        });
+        if mount.exit_handler.is_none() {
+            predicates.push(parse_quote_spanned! {machine.span()=>
+                #machine: ::sotu::private::ExitlessSubmachine
+            });
+        }
     }
 
     generics
@@ -1409,9 +1411,29 @@ fn projection_impl(machine: &MachineIr, mounts: &[MountIr]) -> Option<TokenStrea
 ///
 /// Targets are wrapped in the mount's state variant and offsets are kept,
 /// because they count levels above the visited node, which is the same node in
-/// both machines. The child is exitless, so its exit type is uninhabited.
-fn lifted_outcome(state_name: &Ident, mount: &MountIr, outcome: &Ident) -> TokenStream {
+/// both machines. An exit of the child goes to the mount's exit handler, and
+/// without one the child is exitless, so its exit type is uninhabited.
+fn lifted_outcome(
+    state_name: &Ident,
+    shared_storage: &Type,
+    mount: &MountIr,
+    outcome: &Ident,
+) -> TokenStream {
     let variant = &mount.variant;
+
+    let exit_arm = match &mount.exit_handler {
+        Some(exit_handler) => {
+            let exit = generated_ident("exit");
+            let answer = exit_handler_answer(shared_storage, mount, exit_handler);
+
+            quote! {
+                ::sotu::private::NodeOutcome::Exit(#exit) => #answer,
+            }
+        }
+        None => quote! {
+            ::sotu::private::NodeOutcome::Exit(exit) => match exit {},
+        },
+    };
 
     quote! {
         match #outcome {
@@ -1427,11 +1449,58 @@ fn lifted_outcome(state_name: &Ident, mount: &MountIr, outcome: &Ident) -> Token
                 target: #state_name::#variant(target),
                 handler_offset,
             },
-            ::sotu::private::NodeOutcome::Exit(exit) => match exit {},
+            #exit_arm
             ::sotu::private::NodeOutcome::DeferToMount { mount_offset } => {
                 ::sotu::private::NodeOutcome::DeferToMount { mount_offset }
             }
         }
+    }
+}
+
+/// Generate the call of `mount`'s exit handler with the child's exit value
+/// and the expression that turns its answer into the parent's `NodeOutcome`.
+///
+/// The visited child node lies `mount_offset` levels below the mount node, so
+/// an external transition is handled by the mount node, and `Super` continues
+/// at the mount node, skipping the child nodes above the visited one. An exit
+/// of the parent stays an exit and leaves through the next mount boundary or
+/// terminates the root. The `submachine` input borrows the instance again
+/// after the child's dispatch returned, and without the instance, which only
+/// user code can empty, the exit handler is skipped as if it returned `Super`.
+fn exit_handler_answer(
+    shared_storage: &Type,
+    mount: &MountIr,
+    exit_handler: &MountActionIr,
+) -> TokenStream {
+    let handler = call(shared_storage, &exit_handler.call);
+    let deferred = quote!(::sotu::private::NodeOutcome::DeferToMount { mount_offset });
+
+    let answer = quote! {
+        match #handler {
+            ::sotu::Outcome::Handled => ::sotu::private::NodeOutcome::Handled,
+            ::sotu::Outcome::Super => #deferred,
+            ::sotu::Outcome::Transition(target) => {
+                ::sotu::private::NodeOutcome::Transition(target)
+            }
+            ::sotu::Outcome::ExternalTransition(target) => {
+                ::sotu::private::NodeOutcome::ExternalTransition {
+                    target,
+                    handler_offset: mount_offset,
+                }
+            }
+            ::sotu::Outcome::Exit(parent_exit) => ::sotu::private::NodeOutcome::Exit(parent_exit),
+        }
+    };
+
+    if exit_handler.takes_submachine {
+        instance_call(
+            mount,
+            &generated_ident("shared_storage"),
+            &answer,
+            &deferred,
+        )
+    } else {
+        answer
     }
 }
 
@@ -1500,7 +1569,7 @@ fn dispatch_arm_into_child(
     let event = generated_ident("event");
     let submachine = generated_ident("submachine");
     let outcome = generated_ident("outcome");
-    let lifted = lifted_outcome(context.state_name, mount, &outcome);
+    let lifted = lifted_outcome(context.state_name, context.shared_storage, mount, &outcome);
 
     let before_dispatch = child_context_call(mount, |context| {
         quote! {
