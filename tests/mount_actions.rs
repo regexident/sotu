@@ -100,6 +100,51 @@ mod house {
     }
 }
 
+mod garage {
+    use sotu::prelude::*;
+
+    use super::door;
+
+    /// A parent that names the input borrowing the instance `child`.
+    #[derive(Default)]
+    pub struct Garage {
+        pub door: Option<door::Door>,
+    }
+
+    pub enum Event {
+        Enter,
+        Knock,
+    }
+
+    #[state_machine(initial = State::idle(), submachine_identifier = child)]
+    impl Garage {
+        #[state]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Enter => Transition(Superstate::loading()),
+                Event::Knock => Handled,
+            }
+        }
+
+        #[submachine(machine = door::Door, field = door, entry_action = prepare)]
+        fn loading(child: &mut door::Door, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Enter => Handled,
+                Event::Knock => {
+                    child.openings += 1;
+
+                    Handled
+                }
+            }
+        }
+
+        #[action]
+        fn prepare(child: &mut door::Door) {
+            child.openings = 40;
+        }
+    }
+}
+
 /// Return an initialized `House` in `idle`, with an empty trace.
 fn idle_house() -> InitializedStateMachine<house::House> {
     let machine = house::House::default()
@@ -147,4 +192,16 @@ fn mount_action_sees_instance() {
     machine.handle(house::Event::Enter, &mut ());
 
     assert_eq!(machine.door.as_ref().map(|door| door.openings), Some(9));
+}
+
+#[test]
+fn renamed_submachine_identifier_works() {
+    let mut machine = garage::Garage::default()
+        .uninitialized_state_machine()
+        .init(&mut ());
+
+    machine.handle(garage::Event::Enter, &mut ());
+    machine.handle(garage::Event::Knock, &mut ());
+
+    assert_eq!(machine.door.as_ref().map(|door| door.openings), Some(41));
 }
