@@ -610,6 +610,8 @@ pub(crate) struct SubmachineArgs {
     pub(crate) field: Option<Ident>,
     /// The function that creates the mounted machine when its instance field is empty.
     pub(crate) factory: Option<Path>,
+    /// The function that builds the mounted machine's context from the parent's.
+    pub(crate) context: Option<Path>,
     /// The name of the generated variants, replacing the one derived from the handler.
     pub(crate) name: Option<Ident>,
     /// The handler name of the enclosing superstate.
@@ -717,6 +719,7 @@ impl SubmachineArgs {
         "machine",
         "field",
         "factory",
+        "context",
         "name",
         "superstate",
         "entry_action",
@@ -727,6 +730,12 @@ impl SubmachineArgs {
     fn set_key_value(&mut self, key: &Ident, value: &Expr) -> syn::Result<()> {
         if key == "factory" {
             self.factory = Some(path_value(value)?);
+
+            return Ok(());
+        }
+
+        if key == "context" {
+            self.context = Some(path_value(value)?);
 
             return Ok(());
         }
@@ -1248,6 +1257,22 @@ mod tests {
         let factory = arguments.factory;
 
         assert_eq!(quote!(#factory).to_string(), "Self :: make_door");
+    }
+
+    #[test]
+    fn submachine_arguments_read_context() {
+        let attribute: Attribute = parse_quote! {
+            #[submachine(machine = door::Door, field = door, context = map_context)]
+        };
+
+        let Ok(Some(ItemAttribute::Submachine(arguments))) = parse_item_attribute(&attribute)
+        else {
+            panic!("the attribute should parse as a submachine");
+        };
+
+        let context = arguments.context;
+
+        assert_eq!(quote!(#context).to_string(), "map_context");
     }
 
     #[test]
