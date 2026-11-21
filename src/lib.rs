@@ -11,6 +11,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "async")]
+pub mod awaitable;
 pub mod blocking;
 pub mod event;
 mod hierarchy;
