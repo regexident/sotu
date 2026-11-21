@@ -1,0 +1,6 @@
+error: exit handlers can not define their generics themselves
+  --> /tests/expand-tests/submachine/fail/exit_handler_generics.rs:40:19
+   |
+40 |     fn door_exited<T>(exit: door::DoorExit) -> Outcome<State> {
+   |                   ^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
