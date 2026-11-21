@@ -1,3 +1,5 @@
+use crate::StateOrSuperstate;
+
 use super::{State, Superstate};
 
 /// Describe an awaitable state machine whose shared storage is `Self`.
@@ -13,6 +15,10 @@ use super::{State, Superstate};
 /// Contexts take two lifetimes because `&'a mut T` is invariant in `T`: with a
 /// single lifetime, a context such as `&'a mut Writer<'a>` could not be
 /// rebuilt for each event inside a loop.
+///
+/// The four hooks observe dispatch and transitions without influencing them.
+/// Each returns a future that the machine awaits, and each defaults to a
+/// future that completes immediately.
 ///
 /// [`Self::Superstate`]: IntoStateMachine::Superstate
 pub trait IntoStateMachine: Sized {
@@ -39,4 +45,46 @@ pub trait IntoStateMachine: Sized {
 
     /// Return the state the machine starts in.
     fn initial() -> Self::State;
+
+    /// Observe `event` just before `node` handles it.
+    fn before_dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        _node: StateOrSuperstate<'_, Self::State, Self::Superstate<'_>>,
+        _event: &Self::Event,
+        _context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    /// Observe `event` just after `node` handled it.
+    fn after_dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        _node: StateOrSuperstate<'_, Self::State, Self::Superstate<'_>>,
+        _event: &Self::Event,
+        _context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    /// Observe a transition from `source` to `target` just before any exit
+    /// action runs.
+    fn before_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        _source: &Self::State,
+        _target: &Self::State,
+        _context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    /// Observe a transition from `source` to `target` just after the last
+    /// entry action ran.
+    fn after_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        _source: &Self::State,
+        _target: &Self::State,
+        _context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
 }

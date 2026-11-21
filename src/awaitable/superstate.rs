@@ -1,4 +1,5 @@
 use crate::Outcome;
+use crate::private::{Dispatched, NodeOutcome};
 
 use super::IntoStateMachine;
 
@@ -29,6 +30,28 @@ pub trait Superstate<M: IntoStateMachine> {
         context: &mut M::Context<'ctx, 'data>,
     ) -> impl Future<Output = Outcome<M::State, M::Exit>>;
 
+    /// Run when the machine enters this superstate.
+    ///
+    /// The default implementation completes immediately.
+    fn call_entry_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    /// Run when the machine leaves this superstate.
+    ///
+    /// The default implementation completes immediately.
+    fn call_exit_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
     /// Consume this superstate and return the one enclosing it, if there is
     /// one.
     ///
@@ -48,6 +71,28 @@ pub trait Superstate<M: IntoStateMachine> {
     /// the method takes it through [`IntoStateMachine::Superstate`] instead of
     /// `Self`.
     fn same_state(&self, other: &M::Superstate<'_>) -> bool;
+
+    #[doc(hidden)]
+    fn __is_addressed(&self, event: M::Event) -> (bool, M::Event) {
+        (true, event)
+    }
+
+    #[doc(hidden)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = Dispatched<M::State, M::Exit, M::Event>> {
+        async move {
+            let outcome = self.call_handler(shared_storage, &event, context).await;
+
+            Dispatched {
+                outcome: NodeOutcome::from(outcome),
+                event,
+            }
+        }
+    }
 }
 
 impl<M: IntoStateMachine> Superstate<M> for () {

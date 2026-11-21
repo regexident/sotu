@@ -1,4 +1,5 @@
 use crate::Outcome;
+use crate::private::{Dispatched, NodeOutcome};
 
 use super::IntoStateMachine;
 
@@ -12,6 +13,9 @@ use super::IntoStateMachine;
 /// A state that sits inside a superstate returns it from
 /// [`State::superstate`]. Events a state does not handle are deferred to that
 /// superstate by returning [`Outcome::Super`].
+///
+/// The handler and the actions return futures that the machine awaits before
+/// it takes the next step.
 pub trait State<M: IntoStateMachine>: Sized {
     /// Handle `event` and decide what the machine does next.
     fn call_handler<'ctx, 'data: 'ctx>(
@@ -20,6 +24,28 @@ pub trait State<M: IntoStateMachine>: Sized {
         event: &M::Event,
         context: &mut M::Context<'ctx, 'data>,
     ) -> impl Future<Output = Outcome<Self, M::Exit>>;
+
+    /// Run when the machine enters this state.
+    ///
+    /// The default implementation completes immediately.
+    fn call_entry_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    /// Run when the machine leaves this state.
+    ///
+    /// The default implementation completes immediately.
+    fn call_exit_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
 
     /// Return the superstate enclosing this state, if there is one.
     ///
@@ -35,5 +61,56 @@ pub trait State<M: IntoStateMachine>: Sized {
     /// values.
     fn same_state(&self, other: &Self) -> bool {
         core::mem::discriminant(self) == core::mem::discriminant(other)
+    }
+
+    #[doc(hidden)]
+    fn __is_addressed(&self, event: M::Event) -> (bool, M::Event) {
+        (true, event)
+    }
+
+    #[doc(hidden)]
+    fn __dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = Dispatched<Self, M::Exit, M::Event>> {
+        async move {
+            let outcome = self.call_handler(shared_storage, &event, context).await;
+
+            Dispatched {
+                outcome: NodeOutcome::from(outcome),
+                event,
+            }
+        }
+    }
+
+    #[doc(hidden)]
+    fn __internal_transition_nesting(&mut self, _target: &mut Self, _exit_levels: usize) -> usize {
+        0
+    }
+
+    #[doc(hidden)]
+    fn __before_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        _target: &mut Self,
+        _exit_levels: usize,
+        _nesting: usize,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
+    }
+
+    #[doc(hidden)]
+    fn __after_internal_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        _target: &mut Self,
+        _exit_levels: usize,
+        _nesting: usize,
+        _shared_storage: &mut M,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        core::future::ready(())
     }
 }
