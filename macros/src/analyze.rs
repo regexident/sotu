@@ -162,6 +162,10 @@ pub(crate) struct MountModel {
     /// The function that creates the mounted machine, or `None` to create it
     /// with `Default`.
     pub(crate) factory: Option<Path>,
+    /// The function that builds the mounted machine's context from the parent's
+    /// for each call into the mounted machine, or `None` to pass the parent's
+    /// context through.
+    pub(crate) context: Option<Path>,
     /// The handler name of the enclosing superstate or mount.
     pub(crate) superstate: Option<Ident>,
     /// The action to run after the mounted machine is created.
@@ -1074,6 +1078,7 @@ fn analyze_mount(
         machine,
         field,
         factory: arguments.factory,
+        context: arguments.context,
         superstate: arguments.superstate,
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
