@@ -1,0 +1,6 @@
+error: unused exit handler
+  --> /tests/expand-tests/submachine/fail/unused_exit_handler.rs:47:8
+   |
+47 |     fn spare_exited(exit: door::DoorExit) -> Outcome<State> {
+   |        ^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
