@@ -353,6 +353,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
 
     check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
     check_links(&states, &superstates, &mounts, &actions, &mut errors);
+    check_exit_handler_references(&mounts, &exit_handlers, &mut errors);
     check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
     check_custom_with_derives(&arguments.state, &mut errors);
 
@@ -679,6 +680,28 @@ fn check_superstate_references(
             push_error(
                 errors,
                 syn::Error::new_spanned(name, "superstate not found"),
+            );
+        }
+    }
+}
+
+/// Report every `exit_handler` of a mount that names no `#[exit_handler]`.
+fn check_exit_handler_references(
+    mounts: &[MountModel],
+    exit_handlers: &[ExitHandlerModel],
+    errors: &mut Option<syn::Error>,
+) {
+    for name in mounts
+        .iter()
+        .filter_map(|mount| mount.exit_handler.as_ref())
+    {
+        if !exit_handlers
+            .iter()
+            .any(|exit_handler| exit_handler.name == *name)
+        {
+            push_error(
+                errors,
+                syn::Error::new_spanned(name, "exit handler not found"),
             );
         }
     }
@@ -2748,6 +2771,45 @@ mod tests {
                 "`submachine` borrows field `door` of `self`; take either a receiver or \
                  `submachine`, not both"
             ]
+        );
+    }
+
+    #[test]
+    fn missing_exit_handler_is_reported() {
+        let nodes = nodes(parse_quote! {
+            impl Washer {
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, exit_handler = greet)]
+                fn spare() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = back, exit_handler = absent)]
+                fn back() -> Outcome<State> {
+                    Super
+                }
+
+                #[exit_handler]
+                fn door_exited(exit: DoorExit) -> Outcome<State> {
+                    Handled
+                }
+
+                #[action]
+                fn greet() {}
+            }
+        });
+
+        let mut errors = None;
+
+        check_exit_handler_references(&nodes.mounts, &nodes.exit_handlers, &mut errors);
+
+        assert_eq!(
+            messages(errors),
+            ["exit handler not found", "exit handler not found"]
         );
     }
 
