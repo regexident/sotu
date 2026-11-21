@@ -1,3 +1,5 @@
+mod common;
+
 // MARK: Child Machine
 
 mod child {
@@ -169,7 +171,9 @@ mod parent {
     }
 }
 
-use child::{Drain, Spin};
+use core::fmt::Debug;
+
+use child::{Child, ChildExit, Drain, Spin};
 use parent::{Parent, ParentExit, Start, Stop};
 use sotu::prelude::*;
 
@@ -226,4 +230,67 @@ fn mounted_machine_runs_without_standard_traits() {
     // `cycle` (10) and the mount (11). Restarting enters `idle` again, and
     // `Start` creates and enters a fresh child.
     assert_eq!(log, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2, 3, 4]);
+}
+
+#[test]
+fn mounted_types_implement_no_standard_traits() {
+    common::assert_not_impl!(Parent: Clone);
+    common::assert_not_impl!(Parent: Copy);
+    common::assert_not_impl!(Parent: Debug);
+    common::assert_not_impl!(Parent: PartialEq);
+    common::assert_not_impl!(Parent: Default);
+
+    common::assert_not_impl!(parent::Event: Clone);
+    common::assert_not_impl!(parent::Event: Copy);
+    common::assert_not_impl!(parent::Event: Debug);
+    common::assert_not_impl!(parent::Event: PartialEq);
+    common::assert_not_impl!(parent::Event: Default);
+
+    common::assert_not_impl!(ParentExit: Clone);
+    common::assert_not_impl!(ParentExit: Copy);
+    common::assert_not_impl!(ParentExit: Debug);
+    common::assert_not_impl!(ParentExit: PartialEq);
+    common::assert_not_impl!(ParentExit: Default);
+
+    common::assert_not_impl!(parent::State: Clone);
+    common::assert_not_impl!(parent::State: Copy);
+    common::assert_not_impl!(parent::State: Debug);
+    common::assert_not_impl!(parent::State: PartialEq);
+    common::assert_not_impl!(parent::State: Default);
+
+    common::assert_not_impl!(parent::Superstate: Clone);
+    common::assert_not_impl!(parent::Superstate: Copy);
+    common::assert_not_impl!(parent::Superstate: Debug);
+    common::assert_not_impl!(parent::Superstate: PartialEq);
+    common::assert_not_impl!(parent::Superstate: Default);
+
+    common::assert_not_impl!(Child: Clone);
+    common::assert_not_impl!(Child: Copy);
+    common::assert_not_impl!(Child: Debug);
+    common::assert_not_impl!(Child: PartialEq);
+    common::assert_not_impl!(Child: Default);
+
+    common::assert_not_impl!(child::Event: Clone);
+    common::assert_not_impl!(child::Event: Copy);
+    common::assert_not_impl!(child::Event: Debug);
+    common::assert_not_impl!(child::Event: PartialEq);
+    common::assert_not_impl!(child::Event: Default);
+
+    common::assert_not_impl!(ChildExit: Clone);
+    common::assert_not_impl!(ChildExit: Copy);
+    common::assert_not_impl!(ChildExit: Debug);
+    common::assert_not_impl!(ChildExit: PartialEq);
+    common::assert_not_impl!(ChildExit: Default);
+
+    common::assert_not_impl!(child::State: Clone);
+    common::assert_not_impl!(child::State: Copy);
+    common::assert_not_impl!(child::State: Debug);
+    common::assert_not_impl!(child::State: PartialEq);
+    common::assert_not_impl!(child::State: Default);
+
+    common::assert_not_impl!(child::Superstate: Clone);
+    common::assert_not_impl!(child::Superstate: Copy);
+    common::assert_not_impl!(child::Superstate: Debug);
+    common::assert_not_impl!(child::Superstate: PartialEq);
+    common::assert_not_impl!(child::Superstate: Default);
 }
