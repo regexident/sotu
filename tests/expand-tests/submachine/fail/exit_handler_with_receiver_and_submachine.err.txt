@@ -1,0 +1,6 @@
+error: `submachine` borrows field `door` of `self`; take either a receiver or `submachine`, not both
+  --> /tests/expand-tests/submachine/fail/exit_handler_with_receiver_and_submachine.rs:45:9
+   |
+45 |         submachine: &mut door::Door,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
