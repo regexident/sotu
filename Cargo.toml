@@ -1,5 +1,5 @@
 [workspace]
-members = ["macros"]
+members = ["macros", "test-crates/door"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
