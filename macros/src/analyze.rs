@@ -783,6 +783,7 @@ fn check_signature(
     check_default_attributes(function, role, names, errors);
     check_input_patterns(function, errors);
     check_inputs_by_reference(function, role, names, errors);
+    check_exit_input(function, names, errors);
 
     match attachment {
         Some(Attachment {
@@ -902,7 +903,8 @@ fn check_input_patterns(function: &ImplItemFn, errors: &mut Option<syn::Error>) 
 /// Local storage lives in the state, and handlers and actions borrow it, so an
 /// input taking a field by value would have to move it out of the state.
 /// Inputs whose pattern is not an identifier are left to
-/// [`check_input_patterns`].
+/// [`check_input_patterns`], and inputs named after the exit identifier to
+/// [`check_exit_input`].
 fn check_inputs_by_reference(
     function: &ImplItemFn,
     role: Role,
@@ -916,6 +918,7 @@ fn check_inputs_by_reference(
 
         let is_local_storage = matches!(&*typed.pat, Pat::Ident(_))
             && !is_named(typed, &names.context)
+            && !is_named(typed, &names.exit)
             && (role == Role::Action || !is_named(typed, &names.event));
 
         if is_local_storage && !matches!(&*typed.ty, Type::Reference(_)) {
@@ -932,7 +935,8 @@ fn check_inputs_by_reference(
 /// A mount's leaves are states of the mounted machine, which have no fields of
 /// the parent to lend, so a mount handler can only take the receiver, the
 /// event, the context and the `submachine` input. Inputs that are not
-/// references are left to [`check_inputs_by_reference`], so that each input is
+/// references are left to [`check_inputs_by_reference`], and inputs named
+/// after the exit identifier to [`check_exit_input`], so that each input is
 /// reported once.
 fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Option<syn::Error>) {
     for input in &function.sig.inputs {
@@ -943,7 +947,8 @@ fn check_mount_inputs(function: &ImplItemFn, names: &InputNames, errors: &mut Op
         let is_local_storage = local_storage_input(typed).is_some()
             && !is_named(typed, &names.event)
             && !is_named(typed, &names.context)
-            && !is_named(typed, &names.submachine);
+            && !is_named(typed, &names.submachine)
+            && !is_named(typed, &names.exit);
 
         if is_local_storage {
             push_error(
@@ -985,6 +990,31 @@ fn check_submachine_input(
                     typed,
                     "`submachine` is only available on submachine handlers, their actions and \
                      exit handlers",
+                ),
+            );
+        }
+    }
+}
+
+/// Report every input of `function` named after the exit identifier.
+///
+/// Only an exit handler receives a mounted machine's exit value, so an input
+/// of that name is rejected on every other handler and action, whatever its
+/// type, and is not classified as local storage.
+fn check_exit_input(function: &ImplItemFn, names: &InputNames, errors: &mut Option<syn::Error>) {
+    for input in &function.sig.inputs {
+        let FnArg::Typed(typed) = input else {
+            continue;
+        };
+
+        if is_named(typed, &names.exit) {
+            let exit = &names.exit;
+
+            push_error(
+                errors,
+                syn::Error::new_spanned(
+                    typed,
+                    format!("`{exit}` is only available on exit handlers"),
                 ),
             );
         }
@@ -1043,7 +1073,8 @@ fn check_receiver_and_submachine(
 /// `submachine` input, so on any other handler an input of that name is local
 /// storage, which [`check_submachine_input`] reports. Inputs that are not local
 /// storage are skipped, since [`check_input_patterns`] and
-/// [`check_inputs_by_reference`] report them.
+/// [`check_inputs_by_reference`] report them, and so are inputs named after
+/// the exit identifier, which [`check_exit_input`] reports.
 fn handler_inputs(
     function: &mut ImplItemFn,
     role: Role,
@@ -1064,6 +1095,7 @@ fn handler_inputs(
             {
                 inputs.push(InputKind::Submachine);
             }
+            FnArg::Typed(typed) if is_named(typed, &names.exit) => {}
             FnArg::Typed(typed) if is_named(typed, &names.event) => match event_referent(typed) {
                 Ok(referent) => {
                     inputs.push(InputKind::Event);
@@ -1276,7 +1308,8 @@ fn analyze_state(
 /// other action an input of that name is local storage, which
 /// [`check_submachine_input`] reports. Inputs that are not local storage are
 /// skipped, since [`check_input_patterns`] and [`check_inputs_by_reference`]
-/// report them.
+/// report them, and so are inputs named after the exit identifier, which
+/// [`check_exit_input`] reports.
 fn analyze_action(function: &ImplItemFn, names: &InputNames, attached: bool) -> ActionModel {
     let mut inputs = Vec::new();
 
@@ -1289,6 +1322,7 @@ fn analyze_action(function: &ImplItemFn, names: &InputNames, attached: bool) -> 
             FnArg::Typed(typed) if attached && is_named(typed, &names.submachine) => {
                 inputs.push(InputKind::Submachine);
             }
+            FnArg::Typed(typed) if is_named(typed, &names.exit) => {}
             FnArg::Typed(typed) => {
                 if let Some((name, ty, mutable)) = local_storage_input(typed) {
                     inputs.push(InputKind::LocalStorage {
@@ -2678,24 +2712,27 @@ mod tests {
 
     #[test]
     fn exit_handler_inputs_are_classified() {
-        let nodes = nodes(parse_quote! {
-            impl Washer {
-                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
-                fn loading(event: &Event) -> Outcome<State> {
-                    Super
-                }
+        let (nodes, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl Washer {
+                    #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                    fn loading(event: &Event) -> Outcome<State> {
+                        Super
+                    }
 
-                #[exit_handler]
-                fn door_exited(&mut self, exit: DoorExit, context: &mut ()) -> Outcome<State> {
-                    Handled
-                }
+                    #[exit_handler]
+                    fn door_exited(&mut self, exit: DoorExit, context: &mut ()) -> Outcome<State> {
+                        Handled
+                    }
 
-                #[state]
-                fn idle(exit: &u8) -> Outcome<State> {
-                    Handled
+                    #[state]
+                    fn idle(exit: &u8) -> Outcome<State> {
+                        Handled
+                    }
                 }
-            }
-        });
+            },
+            &names(),
+        );
 
         let [exit_handler] = nodes.exit_handlers.as_slice() else {
             panic!("the machine should have one exit handler");
@@ -2706,10 +2743,11 @@ mod tests {
             exit_handler.inputs,
             [InputKind::Receiver, InputKind::Exit, InputKind::Context]
         );
-        assert!(matches!(
-            nodes.states[0].inputs.as_slice(),
-            [InputKind::LocalStorage { name, .. }] if *name == "exit"
-        ));
+        assert!(nodes.states[0].inputs.is_empty());
+        assert_eq!(
+            messages(errors),
+            ["`exit` is only available on exit handlers"]
+        );
 
         let arguments: MachineArgs =
             syn::parse_str("initial = State::idle(), exit_identifier = done").unwrap();
@@ -2888,6 +2926,89 @@ mod tests {
         check_unused_exit_handlers(&unused.mounts, &unused.exit_handlers, &mut errors);
 
         assert_eq!(messages(errors), ["unused exit handler"]);
+    }
+
+    #[test]
+    fn exit_input_outside_exit_handler_is_reported() {
+        let state: ImplItemFn = parse_quote! {
+            fn on(event: &Event, exit: &u8) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let superstate: ImplItemFn = parse_quote! {
+            fn group(exit: u8) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let mount: ImplItemFn = parse_quote! {
+            fn loading(submachine: &mut door::Door, exit: &mut u8) -> Outcome<State> {
+                Super
+            }
+        };
+
+        let action: ImplItemFn = parse_quote! {
+            fn prepare(&mut self, exit: &u8) {}
+        };
+
+        let plain: ImplItemFn = parse_quote! {
+            fn off(event: &Event, done: &u8) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let mut accepted = None;
+
+        check_exit_input(&plain, &names(), &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let mut errors = None;
+
+        for function in [&state, &superstate, &mount, &action] {
+            check_exit_input(function, &names(), &mut errors);
+        }
+
+        let message = "`exit` is only available on exit handlers";
+
+        assert_eq!(messages(errors), [message, message, message, message]);
+
+        let renamed = InputNames {
+            exit: ident("done"),
+            ..names()
+        };
+
+        let mut renamed_errors = None;
+
+        check_exit_input(&state, &renamed, &mut renamed_errors);
+        check_exit_input(&plain, &renamed, &mut renamed_errors);
+
+        assert_eq!(
+            messages(renamed_errors),
+            ["`done` is only available on exit handlers"]
+        );
+
+        let (nodes, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl Washer {
+                    #[submachine(machine = door::Door, field = door)]
+                    fn loading(exit: &u8) -> Outcome<State> {
+                        Super
+                    }
+
+                    #[state]
+                    fn idle(exit: u8) -> Outcome<State> {
+                        Handled
+                    }
+                }
+            },
+            &names(),
+        );
+
+        assert!(nodes.mounts[0].inputs.is_empty());
+        assert!(nodes.states[0].inputs.is_empty());
+        assert_eq!(messages(errors), [message, message]);
     }
 
     #[test]
