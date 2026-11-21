@@ -1,0 +1,6 @@
+error: exit handler not found
+  --> /tests/expand-tests/submachine/fail/missing_exit_handler.rs:34:69
+   |
+34 |     #[submachine(machine = door::Door, field = door, exit_handler = door_left)]
+   |                                                                     ^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
