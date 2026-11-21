@@ -327,6 +327,153 @@ mod station {
     }
 }
 
+/// The composition of a door and a washer, as two crates would write it.
+mod example {
+    pub mod door {
+        use sotu::prelude::*;
+
+        pub struct Open;
+        pub struct Close;
+
+        #[derive(Event)]
+        pub enum Event {
+            Open(Open),
+            Close(Close),
+        }
+
+        pub enum DoorExit {
+            Closed,
+        }
+
+        #[derive(Default)]
+        pub struct Door {
+            pub openings: u32,
+        }
+
+        #[state_machine(initial = State::opened(), exit = DoorExit)]
+        impl Door {
+            #[state(entry_action = count_opening)]
+            fn opened(event: &Event) -> Outcome<State, DoorExit> {
+                match event {
+                    Event::Close(_) => Exit(DoorExit::Closed),
+                    Event::Open(_) => Handled,
+                }
+            }
+
+            #[action]
+            fn count_opening(&mut self) {
+                self.openings += 1;
+            }
+        }
+    }
+
+    pub mod washer {
+        use sotu::prelude::*;
+
+        use super::door;
+
+        pub struct Start;
+        pub struct Tick;
+
+        #[derive(Event)]
+        pub enum Event {
+            Start(Start),
+            Tick(Tick),
+            Open(door::Open),
+            Close(door::Close),
+        }
+
+        #[derive(Default)]
+        pub struct Washer {
+            cycles: u32,
+            // A fresh door instance for every activation of `loading`.
+            door: Option<door::Door>,
+        }
+
+        #[state_machine(initial = State::idle())]
+        impl Washer {
+            #[state]
+            fn idle(event: &Event) -> Outcome<State> {
+                match event {
+                    Event::Start(_) => Transition(Superstate::loading()),
+                    _ => Super,
+                }
+            }
+
+            // Parent-level behavior while the door sub-machine is active.
+            #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+            fn loading(submachine: &mut door::Door, event: &Event) -> Outcome<State> {
+                match event {
+                    Event::Tick(_) if submachine.openings > 3 => Transition(State::idle()),
+                    _ => Super,
+                }
+            }
+
+            #[exit_handler]
+            fn door_exited(exit: door::DoorExit) -> Outcome<State> {
+                match exit {
+                    door::DoorExit::Closed => Transition(State::washing()),
+                }
+            }
+
+            #[state]
+            fn washing(&mut self, event: &Event) -> Outcome<State> {
+                match event {
+                    Event::Tick(_) => {
+                        self.cycles += 1;
+                        Transition(State::idle())
+                    }
+                    _ => Super,
+                }
+            }
+        }
+
+        // The fields of `Washer` are private to this module, as they are to
+        // the crate that defines it, so the test that inspects them lives here.
+        #[test]
+        fn door_and_washer_example_runs_as_specified() {
+            let mut machine = Washer::default()
+                .uninitialized_state_machine()
+                .init(&mut ());
+
+            machine.handle(Start, &mut ());
+
+            assert!(matches!(
+                machine.state(),
+                State::Loading(door::State::Opened {})
+            ));
+            assert_eq!(machine.door.as_ref().map(|door| door.openings), Some(1));
+
+            machine.handle(Tick, &mut ());
+
+            assert!(matches!(
+                machine.state(),
+                State::Loading(door::State::Opened {})
+            ));
+
+            if let Some(door) = machine.inner_mut().door.as_mut() {
+                door.openings = 4;
+            }
+
+            machine.handle(Tick, &mut ());
+
+            assert!(matches!(machine.state(), State::Idle {}));
+            assert!(machine.door.is_none());
+
+            machine.handle(Start, &mut ());
+            machine.handle(door::Close, &mut ());
+
+            assert!(matches!(machine.state(), State::Washing {}));
+            assert!(machine.door.is_none());
+
+            machine.handle(Tick, &mut ());
+
+            assert!(matches!(machine.state(), State::Idle {}));
+            assert_eq!(machine.cycles, 1);
+        }
+    }
+}
+
 /// Return an initialized `Laundry` that answers the door's exit as `answer`
 /// says, in `loading` with the door in `opened`, with an empty trace.
 fn loading_laundry(answer: laundry::Answer) -> InitializedStateMachine<laundry::Laundry> {
