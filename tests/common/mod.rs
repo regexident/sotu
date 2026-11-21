@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 
 pub mod bare;
+#[cfg(feature = "async")]
+pub mod pending_once;
 pub mod trace;
 pub mod tree;
 
