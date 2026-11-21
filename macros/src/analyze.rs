@@ -354,6 +354,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
     check_links(&states, &superstates, &mounts, &actions, &mut errors);
     check_exit_handler_references(&mounts, &exit_handlers, &mut errors);
+    check_unused_exit_handlers(&mounts, &exit_handlers, &mut errors);
     check_context_declared(&context_inputs, arguments.context.is_some(), &mut errors);
     check_custom_with_derives(&arguments.state, &mut errors);
 
@@ -702,6 +703,29 @@ fn check_exit_handler_references(
             push_error(
                 errors,
                 syn::Error::new_spanned(name, "exit handler not found"),
+            );
+        }
+    }
+}
+
+/// Report every `#[exit_handler]` that no mount names.
+///
+/// Several mounts may share one exit handler, so a handler is used as soon as
+/// any mount names it.
+fn check_unused_exit_handlers(
+    mounts: &[MountModel],
+    exit_handlers: &[ExitHandlerModel],
+    errors: &mut Option<syn::Error>,
+) {
+    for exit_handler in exit_handlers {
+        let referenced = mounts
+            .iter()
+            .any(|mount| mount.exit_handler.as_ref() == Some(&exit_handler.name));
+
+        if !referenced {
+            push_error(
+                errors,
+                syn::Error::new_spanned(&exit_handler.name, "unused exit handler"),
             );
         }
     }
@@ -2811,6 +2835,59 @@ mod tests {
             messages(errors),
             ["exit handler not found", "exit handler not found"]
         );
+    }
+
+    #[test]
+    fn unused_exit_handler_is_reported() {
+        let shared = nodes(parse_quote! {
+            impl Washer {
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[submachine(machine = door::Door, field = spare, exit_handler = door_exited)]
+                fn spare() -> Outcome<State> {
+                    Super
+                }
+
+                #[exit_handler]
+                fn door_exited(exit: DoorExit) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let mut accepted = None;
+
+        check_unused_exit_handlers(&shared.mounts, &shared.exit_handlers, &mut accepted);
+
+        assert!(accepted.is_none());
+
+        let unused = nodes(parse_quote! {
+            impl Washer {
+                #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                fn loading() -> Outcome<State> {
+                    Super
+                }
+
+                #[exit_handler]
+                fn door_exited(exit: DoorExit) -> Outcome<State> {
+                    Handled
+                }
+
+                #[exit_handler]
+                fn spare_exited(exit: DoorExit) -> Outcome<State> {
+                    Handled
+                }
+            }
+        });
+
+        let mut errors = None;
+
+        check_unused_exit_handlers(&unused.mounts, &unused.exit_handlers, &mut errors);
+
+        assert_eq!(messages(errors), ["unused exit handler"]);
     }
 
     #[test]
