@@ -1,0 +1,6 @@
+error: `submachine` borrows field `door` of `self`; take either a receiver or `submachine`, not both
+  --> /tests/expand-tests/submachine/fail/receiver_and_submachine.rs:39:25
+   |
+39 |     fn greet(&mut self, submachine: &mut door::Door) {
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
