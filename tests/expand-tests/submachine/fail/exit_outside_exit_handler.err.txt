@@ -1,0 +1,6 @@
+error: `exit` is only available on exit handlers
+ --> /tests/expand-tests/submachine/fail/exit_outside_exit_handler.rs:9:12
+  |
+9 |     fn off(exit: &mut bool) -> Outcome<State> {
+  |            ^^^^^^^^^^^^^^^
+error: could not compile `<CRATE>` (bin "<BIN>") due to 1 previous error
