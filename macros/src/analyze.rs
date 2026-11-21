@@ -313,6 +313,8 @@ enum Role {
     Submachine,
     /// An `#[action]`.
     Action,
+    /// An `#[exit_handler]`.
+    ExitHandler,
 }
 
 // MARK: Analysis
@@ -507,6 +509,8 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                 actions.push(analyze_action(function, names, attachment.is_some()));
             }
             (ItemAttribute::ExitHandler, ImplItem::Fn(function)) => {
+                check_generics(function, Role::ExitHandler, &mut errors);
+
                 let attachment = attachments
                     .iter()
                     .find(|attachment| attachment.function == function.sig.ident);
@@ -815,6 +819,7 @@ fn check_generics(function: &ImplItemFn, role: Role, errors: &mut Option<syn::Er
         Role::Superstate => "superstate handlers",
         Role::Submachine => "submachine handlers",
         Role::Action => "actions",
+        Role::ExitHandler => "exit handlers",
     };
 
     push_error(
@@ -2261,6 +2266,49 @@ mod tests {
             messages(errors),
             ["actions can not define their generics themselves"]
         );
+    }
+
+    #[test]
+    fn exit_handler_generics_are_reported() {
+        let generic: ImplItemFn = parse_quote! {
+            fn door_exited<T>(exit: DoorExit) -> Outcome<State> {
+                Handled
+            }
+        };
+
+        let plain: ImplItemFn = parse_quote! {
+            fn door_exited(exit: DoorExit) -> Outcome<State> where Self: Sized {
+                Handled
+            }
+        };
+
+        let mut errors = None;
+
+        check_generics(&generic, Role::ExitHandler, &mut errors);
+        check_generics(&plain, Role::ExitHandler, &mut errors);
+
+        let message = "exit handlers can not define their generics themselves";
+
+        assert_eq!(messages(errors), [message]);
+
+        let (_, errors) = collect_nodes(
+            &mut parse_quote! {
+                impl Washer {
+                    #[submachine(machine = door::Door, field = door, exit_handler = door_exited)]
+                    fn loading() -> Outcome<State> {
+                        Super
+                    }
+
+                    #[exit_handler]
+                    fn door_exited<'a>(exit: DoorExit) -> Outcome<State> {
+                        Handled
+                    }
+                }
+            },
+            &names(),
+        );
+
+        assert_eq!(messages(errors), [message]);
     }
 
     #[test]
