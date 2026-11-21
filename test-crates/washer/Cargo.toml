@@ -1,0 +1,11 @@
+[package]
+name = "sotu-test-washer"
+description = "A parent state machine that mounts a child from another crate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+publish = false
+
+[dependencies]
+sotu = { path = "../.." }
+sotu-test-door = { path = "../door" }
