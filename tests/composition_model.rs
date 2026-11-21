@@ -7,7 +7,7 @@ use test_strategy::Arbitrary;
 
 // MARK: Nodes
 
-/// A node of the composed machine, across both levels of composition.
+/// A node of the composed machine, across all three levels of composition.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Level {
     Idle,
@@ -15,21 +15,27 @@ enum Level {
     Group,
     A,
     B,
+    TaskMount,
+    T1,
+    T2,
 }
 
-const LEVELS: [Level; 5] = [
+const LEVELS: [Level; 8] = [
     Level::Idle,
     Level::WorkMount,
     Level::Group,
     Level::A,
     Level::B,
+    Level::TaskMount,
+    Level::T1,
+    Level::T2,
 ];
 
 // The test harness runs each test on its own thread, and every proptest case
 // starts by resetting these, so no case observes another's counts or ids.
 std::thread_local! {
-    static ENTRIES: RefCell<[i64; 5]> = const { RefCell::new([0; 5]) };
-    static EXITS: RefCell<[i64; 5]> = const { RefCell::new([0; 5]) };
+    static ENTRIES: RefCell<[i64; 8]> = const { RefCell::new([0; 8]) };
+    static EXITS: RefCell<[i64; 8]> = const { RefCell::new([0; 8]) };
     static NEXT_ID: Cell<u32> = const { Cell::new(0) };
 }
 
@@ -50,8 +56,8 @@ fn allocate_id() -> u32 {
 
 /// Clear all entry and exit counts and continue instance ids at `next_id`.
 fn reset_counters(next_id: u32) {
-    ENTRIES.with_borrow_mut(|entries| *entries = [0; 5]);
-    EXITS.with_borrow_mut(|exits| *exits = [0; 5]);
+    ENTRIES.with_borrow_mut(|entries| *entries = [0; 8]);
+    EXITS.with_borrow_mut(|exits| *exits = [0; 8]);
     NEXT_ID.with(|counter| counter.set(next_id));
 }
 
@@ -72,31 +78,103 @@ fn expected_balance(level: Level, path: &[Level]) -> i64 {
 
 // MARK: Machines
 
-mod worker {
+mod task {
     use sotu::prelude::*;
 
     use super::{Level, allocate_id, record_entry, record_exit};
 
-    /// The mounted machine, with leaves `a` and `b` inside the superstate
-    /// `group`.
-    pub struct Worker {
+    /// The innermost machine, toggling between `t1` and `t2`.
+    pub struct Task {
         pub id: u32,
     }
 
-    impl Default for Worker {
+    impl Default for Task {
         fn default() -> Self {
             Self { id: allocate_id() }
         }
     }
 
+    pub struct Flip;
+
+    #[derive(Event)]
+    pub enum Event {
+        Flip(Flip),
+    }
+
+    #[state_machine(initial = State::t1())]
+    impl Task {
+        #[state(entry_action = enter_t1, exit_action = exit_t1)]
+        fn t1(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Flip(_) => Transition(State::t2()),
+            }
+        }
+
+        #[state(entry_action = enter_t2, exit_action = exit_t2)]
+        fn t2(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Flip(_) => Transition(State::t1()),
+            }
+        }
+
+        #[action]
+        fn enter_t1() {
+            record_entry(Level::T1);
+        }
+
+        #[action]
+        fn exit_t1() {
+            record_exit(Level::T1);
+        }
+
+        #[action]
+        fn enter_t2() {
+            record_entry(Level::T2);
+        }
+
+        #[action]
+        fn exit_t2() {
+            record_exit(Level::T2);
+        }
+    }
+}
+
+mod worker {
+    use sotu::prelude::*;
+
+    use super::{Level, allocate_id, record_entry, record_exit, task};
+
+    /// The middle machine, with leaves `a` and `b` and the task mount all
+    /// inside the superstate `group`.
+    pub struct Worker {
+        pub id: u32,
+        pub task: Option<task::Task>,
+    }
+
+    impl Default for Worker {
+        fn default() -> Self {
+            Self {
+                id: allocate_id(),
+                task: None,
+            }
+        }
+    }
+
     pub struct Swap;
+
+    pub struct Dive;
+
+    pub struct Surface;
 
     pub struct Reset;
 
     #[derive(Event)]
     pub enum Event {
         Swap(Swap),
+        Dive(Dive),
+        Surface(Surface),
         Reset(Reset),
+        Flip(task::Flip),
     }
 
     #[state_machine(initial = State::a())]
@@ -105,7 +183,7 @@ mod worker {
         fn a(event: &Event) -> Outcome<State> {
             match event {
                 Event::Swap(_) => Transition(State::b()),
-                Event::Reset(_) => Super,
+                Event::Dive(_) | Event::Surface(_) | Event::Reset(_) | Event::Flip(_) => Super,
             }
         }
 
@@ -113,15 +191,30 @@ mod worker {
         fn b(event: &Event) -> Outcome<State> {
             match event {
                 Event::Swap(_) => Transition(State::a()),
-                Event::Reset(_) => Super,
+                Event::Dive(_) | Event::Surface(_) | Event::Reset(_) | Event::Flip(_) => Super,
+            }
+        }
+
+        #[submachine(
+            machine = task::Task,
+            field = task,
+            superstate = group,
+            entry_action = enter_task_mount,
+            exit_action = exit_task_mount
+        )]
+        fn task(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Surface(_) => Transition(State::a()),
+                Event::Swap(_) | Event::Dive(_) | Event::Reset(_) | Event::Flip(_) => Super,
             }
         }
 
         #[superstate(entry_action = enter_group, exit_action = exit_group)]
         fn group(event: &Event) -> Outcome<State> {
             match event {
+                Event::Dive(_) => Transition(Superstate::task()),
                 Event::Reset(_) => ExternalTransition(State::a()),
-                Event::Swap(_) => Super,
+                Event::Swap(_) | Event::Surface(_) | Event::Flip(_) => Super,
             }
         }
 
@@ -146,6 +239,16 @@ mod worker {
         }
 
         #[action]
+        fn enter_task_mount() {
+            record_entry(Level::TaskMount);
+        }
+
+        #[action]
+        fn exit_task_mount() {
+            record_exit(Level::TaskMount);
+        }
+
+        #[action]
         fn enter_group() {
             record_entry(Level::Group);
         }
@@ -160,7 +263,7 @@ mod worker {
 mod plant {
     use sotu::prelude::*;
 
-    use super::{Level, record_entry, record_exit, worker};
+    use super::{Level, record_entry, record_exit, task, worker};
 
     /// The root machine, idling or running a worker.
     #[derive(Default)]
@@ -177,7 +280,10 @@ mod plant {
         Enter(Enter),
         Leave(Leave),
         Swap(worker::Swap),
+        Dive(worker::Dive),
+        Surface(worker::Surface),
         Reset(worker::Reset),
+        Flip(task::Flip),
     }
 
     #[state_machine(initial = State::idle())]
@@ -237,6 +343,7 @@ mod plant {
 struct PlantReference {
     path: Vec<Level>,
     worker_id: Option<u32>,
+    task_id: Option<u32>,
     next_id: u32,
 }
 
@@ -245,6 +352,9 @@ enum Operation {
     Enter,
     Leave,
     Swap,
+    Dive,
+    Surface,
+    Flip,
     Reset,
 }
 
@@ -256,6 +366,7 @@ impl ReferenceStateMachine for PlantReference {
         Just(PlantReference {
             path: vec![Level::Idle],
             worker_id: None,
+            task_id: None,
             next_id: 0,
         })
         .boxed()
@@ -274,6 +385,7 @@ impl ReferenceStateMachine for PlantReference {
             (Operation::Leave, [Level::WorkMount, ..]) => {
                 state.path = vec![Level::Idle];
                 state.worker_id = None;
+                state.task_id = None;
             }
             (Operation::Swap, [.., Level::A]) => {
                 state.path = worker_path(Level::B);
@@ -281,10 +393,30 @@ impl ReferenceStateMachine for PlantReference {
             (Operation::Swap, [.., Level::B]) => {
                 state.path = worker_path(Level::A);
             }
-            // The external transition exits and enters `group`, while the
-            // worker mount above stays active.
+            (Operation::Dive, [.., Level::A | Level::B]) => {
+                state.path = task_path(Level::T1);
+                state.task_id = Some(state.allocate_id());
+            }
+            // A local transition from `group` to the task's initial leaf stays
+            // inside the active task mount, so the task instance survives.
+            (Operation::Dive, [.., Level::TaskMount, _]) => {
+                state.path = task_path(Level::T1);
+            }
+            (Operation::Surface, [.., Level::TaskMount, _]) => {
+                state.path = worker_path(Level::A);
+                state.task_id = None;
+            }
+            (Operation::Flip, [.., Level::T1]) => {
+                state.path = task_path(Level::T2);
+            }
+            (Operation::Flip, [.., Level::T2]) => {
+                state.path = task_path(Level::T1);
+            }
+            // The external transition exits and enters `group`, which drops an
+            // active task instance, while the worker mount above stays active.
             (Operation::Reset, [Level::WorkMount, ..]) => {
                 state.path = worker_path(Level::A);
+                state.task_id = None;
             }
             _ => {}
         }
@@ -310,6 +442,11 @@ fn worker_path(leaf: Level) -> Vec<Level> {
     vec![Level::WorkMount, Level::Group, leaf]
 }
 
+/// Return the active path ending in the task leaf `leaf`.
+fn task_path(leaf: Level) -> Vec<Level> {
+    vec![Level::WorkMount, Level::Group, Level::TaskMount, leaf]
+}
+
 // MARK: System Under Test
 
 /// Return the active path of `machine`, ordered from the root to the leaf.
@@ -324,6 +461,13 @@ fn active_path(machine: &InitializedStateMachine<plant::Plant>) -> Vec<Level> {
     match worker_state {
         worker::State::A {} => path.push(Level::A),
         worker::State::B {} => path.push(Level::B),
+        worker::State::Task(task_state) => {
+            path.push(Level::TaskMount);
+            path.push(match task_state {
+                task::State::T1 {} => Level::T1,
+                task::State::T2 {} => Level::T2,
+            });
+        }
     }
 
     path
@@ -352,6 +496,9 @@ impl StateMachineTest for PlantModelTest {
             Operation::Enter => machine.handle(plant::Enter, &mut ()),
             Operation::Leave => machine.handle(plant::Leave, &mut ()),
             Operation::Swap => machine.handle(worker::Swap, &mut ()),
+            Operation::Dive => machine.handle(worker::Dive, &mut ()),
+            Operation::Surface => machine.handle(worker::Surface, &mut ()),
+            Operation::Flip => machine.handle(task::Flip, &mut ()),
             Operation::Reset => machine.handle(worker::Reset, &mut ()),
         };
 
@@ -366,6 +513,14 @@ impl StateMachineTest for PlantModelTest {
         assert_eq!(
             machine.work.as_ref().map(|worker| worker.id),
             reference.worker_id
+        );
+        assert_eq!(
+            machine
+                .work
+                .as_ref()
+                .and_then(|worker| worker.task.as_ref())
+                .map(|task| task.id),
+            reference.task_id
         );
 
         for level in LEVELS {
