@@ -86,12 +86,77 @@ impl<M: IntoStateMachine> Deref for UninitializedStateMachine<M> {
 
 /// An awaitable state machine that has entered its initial state and handles
 /// events.
+///
+/// The machine terminates when an [`Outcome::Exit`](crate::Outcome::Exit)
+/// reaches it. A terminated machine keeps its last state for inspection and
+/// ignores events.
+///
+/// # Cancellation
+///
+/// The machine records its progress after every completed action and hook of
+/// a transition or a termination. If the future of
+/// [`handle`](InitializedStateMachine::handle) or
+/// [`step`](InitializedStateMachine::step) is dropped while it awaits one of
+/// them, the next of these calls first completes the interrupted work. The
+/// interrupted action or hook runs again from its start, and every completed
+/// one is never repeated.
+///
+/// Dropping the future while the event is being dispatched, that is while a
+/// handler or a dispatch hook is awaited, loses the event: nothing is resumed
+/// for it.
 pub struct InitializedStateMachine<M: IntoStateMachine> {
     inner: Inner<M>,
 }
 
 impl<M: IntoStateMachine> InitializedStateMachine<M> {
+    /// Complete any interrupted work, then dispatch `event` along the active
+    /// path and perform the resulting transition or termination.
+    ///
+    /// Returns the exit value if this call's event terminated the machine,
+    /// borrowed from the recorded value that
+    /// [`exit`](InitializedStateMachine::exit) also returns. Returns `None`
+    /// otherwise, in particular on a terminated machine, which does not
+    /// dispatch the event at all, and when the call only completed an
+    /// interrupted termination.
+    ///
+    /// A transition awaits the root's `before_transition` hook, the exit
+    /// actions innermost first on the old state, the replacement of the state,
+    /// the entry actions outermost first on the new state, and the root's
+    /// `after_transition` hook. Termination awaits the exit actions of every
+    /// level of the active leaf, innermost first, and fires no transition hook.
+    pub async fn handle(
+        &mut self,
+        event: impl Into<M::Event>,
+        context: &mut M::Context<'_, '_>,
+    ) -> Option<&M::Exit> {
+        self.inner.handle(event.into(), context).await
+    }
+
+    /// Dispatch the unit event `()`, for machines driven by ticks instead of
+    /// distinct events.
+    ///
+    /// Behaves exactly like [`handle`](InitializedStateMachine::handle) called
+    /// with `()`.
+    pub async fn step(&mut self, context: &mut M::Context<'_, '_>) -> Option<&M::Exit>
+    where
+        M: IntoStateMachine<Event = ()>,
+    {
+        self.handle((), context).await
+    }
+
+    /// Return whether the machine has terminated.
+    pub fn is_terminated(&self) -> bool {
+        self.inner.exit.is_some()
+    }
+
+    /// Return the exit value of a terminated machine, or `None` while it runs.
+    pub fn exit(&self) -> Option<&M::Exit> {
+        self.inner.exit.as_ref()
+    }
+
     /// Return a reference to the current leaf state.
+    ///
+    /// On a terminated machine this is the last active state.
     pub fn state(&self) -> &M::State {
         &self.inner.state
     }
