@@ -151,6 +151,24 @@ impl<M: IntoStateMachine> Inner<M> {
         }
     }
 
+    /// Complete any pending work, then return a terminated machine to its
+    /// initial state and initialize it again.
+    ///
+    /// Does nothing else on a running machine.
+    pub(crate) async fn restart(&mut self, context: &mut M::Context<'_, '_>) {
+        self.drive_pending(context).await;
+
+        if self.exit.is_none() {
+            return;
+        }
+
+        self.state = M::initial();
+        self.exit = None;
+
+        self.begin_init();
+        self.drive_pending(context).await;
+    }
+
     /// Record an initialization of every level of the active leaf.
     fn begin_init(&mut self) {
         let levels = StateExt::<M>::depth(&mut self.state);
