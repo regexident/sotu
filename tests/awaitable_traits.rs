@@ -6,10 +6,13 @@ use core::convert::Infallible;
 use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 
+use common::async_tree::{AsyncTree, AsyncTreeState, AsyncTreeSuperstate};
 use common::pending_once::pending_once;
+use common::tree::{Input, Leaf, Node, Record};
 use futures::executor::block_on;
 use sotu::Outcome;
 use sotu::awaitable::{IntoStateMachine, State, Superstate};
+use sotu::private::{Dispatched, NodeOutcome};
 
 // MARK: Probe Machine
 
@@ -59,6 +62,52 @@ fn unit_superstate_defers_and_matches_itself() {
     );
     assert!(<() as Superstate<Probe>>::same_state(&(), &()));
     assert!(<() as Superstate<Probe>>::superstate(()).is_none());
+}
+
+// MARK: State Defaults
+
+#[test]
+fn same_state_compares_variants_only() {
+    assert!(AsyncTreeState::B1 { visits: 1 }.same_state(&AsyncTreeState::B1 { visits: 2 }));
+    assert!(!AsyncTreeState::B1 { visits: 0 }.same_state(&AsyncTreeState::B2 { visits: 0 }));
+}
+
+#[test]
+fn default_dispatch_awaits_handler_and_returns_event() {
+    let mut tree = AsyncTree::default();
+
+    let dispatched =
+        block_on(AsyncTreeState::A1.__dispatch(&mut tree, Input::Go(Leaf::C), &mut ()));
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::Transition(AsyncTreeState::C),
+            event: Input::Go(Leaf::C),
+        }
+    );
+    assert_eq!(tree.trace, vec![Record::Handler(Node::A1)]);
+}
+
+// MARK: Superstate Chains
+
+#[test]
+fn consuming_superstate_moves_borrowed_storage() {
+    let mut state = AsyncTreeState::B1 { visits: 0 };
+
+    match state.superstate() {
+        Some(AsyncTreeSuperstate::B { visits }) => *visits = 5,
+        other => panic!("expected B, found {other:?}"),
+    }
+
+    assert_eq!(state, AsyncTreeState::B1 { visits: 5 });
+
+    let mut value = 0;
+
+    assert!(matches!(
+        AsyncTreeSuperstate::B { visits: &mut value }.superstate(),
+        Some(AsyncTreeSuperstate::A)
+    ));
 }
 
 // MARK: Test Futures
