@@ -1,5 +1,12 @@
 //! An awaitable machine with the hierarchy `top > {A > {A1, B > {B1, B2}}, C}`.
+//!
+//! The machine behaves exactly like [`Tree`](super::tree::Tree): it has the
+//! same handlers and actions, appends the same [`Record`]s to
+//! [`AsyncTree::trace`] and updates the local `visits` counters the same way.
+//! Every handler, action and hook first awaits [`pending_once`], so each step
+//! suspends once before it takes effect.
 
+use sotu::StateOrSuperstate;
 use sotu::awaitable::{IntoStateMachine, State, Superstate};
 use sotu::prelude::Outcome;
 
@@ -48,6 +55,14 @@ pub fn async_leaf_of(state: &AsyncTreeState) -> Leaf {
     }
 }
 
+fn node_of(node: StateOrSuperstate<'_, AsyncTreeState, AsyncTreeSuperstate<'_>>) -> Node {
+    match node {
+        StateOrSuperstate::State(state) => leaf_node(async_leaf_of(state)),
+        StateOrSuperstate::Superstate(AsyncTreeSuperstate::A) => Node::A,
+        StateOrSuperstate::Superstate(AsyncTreeSuperstate::B { .. }) => Node::B,
+    }
+}
+
 // MARK: Machine Implementation
 
 impl IntoStateMachine for AsyncTree {
@@ -59,6 +74,56 @@ impl IntoStateMachine for AsyncTree {
 
     fn initial() -> AsyncTreeState {
         AsyncTreeState::A1
+    }
+
+    async fn before_dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        node: StateOrSuperstate<'_, Self::State, Self::Superstate<'_>>,
+        _event: &Input,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        self.trace.push(Record::BeforeDispatch(node_of(node)));
+    }
+
+    async fn after_dispatch<'ctx, 'data: 'ctx>(
+        &mut self,
+        node: StateOrSuperstate<'_, Self::State, Self::Superstate<'_>>,
+        _event: &Input,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        self.trace.push(Record::AfterDispatch(node_of(node)));
+    }
+
+    async fn before_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        source: &AsyncTreeState,
+        target: &AsyncTreeState,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        self.trace.push(Record::BeforeTransition(
+            async_leaf_of(source),
+            async_leaf_of(target),
+        ));
+    }
+
+    async fn after_transition<'ctx, 'data: 'ctx>(
+        &mut self,
+        source: &AsyncTreeState,
+        target: &AsyncTreeState,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        self.trace.push(Record::AfterTransition(
+            async_leaf_of(source),
+            async_leaf_of(target),
+        ));
     }
 }
 
@@ -84,6 +149,38 @@ impl State<AsyncTree> for AsyncTreeState {
                 Outcome::Exit(Finished::Done)
             }
             _ => Outcome::Super,
+        }
+    }
+
+    async fn call_entry_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut AsyncTree,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        shared_storage
+            .trace
+            .push(Record::Entry(leaf_node(async_leaf_of(self))));
+
+        if let AsyncTreeState::B1 { visits } | AsyncTreeState::B2 { visits } = self {
+            *visits += 1;
+        }
+    }
+
+    async fn call_exit_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut AsyncTree,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        shared_storage
+            .trace
+            .push(Record::Exit(leaf_node(async_leaf_of(self))));
+
+        if let AsyncTreeState::B1 { visits } | AsyncTreeState::B2 { visits } = self {
+            *visits += 10;
         }
     }
 
@@ -130,6 +227,38 @@ impl Superstate<AsyncTree> for AsyncTreeSuperstate<'_> {
                     }
                     _ => Outcome::Super,
                 }
+            }
+        }
+    }
+
+    async fn call_entry_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut AsyncTree,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        match self {
+            AsyncTreeSuperstate::A => shared_storage.trace.push(Record::Entry(Node::A)),
+            AsyncTreeSuperstate::B { visits } => {
+                shared_storage.trace.push(Record::Entry(Node::B));
+                **visits += 1;
+            }
+        }
+    }
+
+    async fn call_exit_action<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut AsyncTree,
+        _context: &mut (),
+    ) {
+        pending_once().await;
+
+        match self {
+            AsyncTreeSuperstate::A => shared_storage.trace.push(Record::Exit(Node::A)),
+            AsyncTreeSuperstate::B { visits } => {
+                shared_storage.trace.push(Record::Exit(Node::B));
+                **visits += 10;
             }
         }
     }
