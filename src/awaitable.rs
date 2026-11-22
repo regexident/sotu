@@ -35,6 +35,7 @@ mod state;
 mod superstate;
 
 pub use hook::DispatchHook;
+pub use hook::TransitionHook;
 pub use into_state_machine::IntoStateMachine;
 pub use state::State;
 pub use superstate::Superstate;

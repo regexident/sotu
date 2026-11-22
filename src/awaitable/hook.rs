@@ -115,3 +115,101 @@ where
         self(shared_storage, node, event, context)
     }
 }
+
+// MARK: Transition Hooks
+
+/// Call a transition hook function, with or without a context parameter, and
+/// return a future that completes when the hook has run.
+///
+/// Implemented for every function that takes the shared storage, the source
+/// state and the target state, optionally followed by the context. It exists
+/// for the same reason as [`DispatchHook`]: generated code awaits
+/// [`call_transition_hook`](TransitionHook::call_transition_hook) and lets
+/// the compiler pick the impl. A hook without a context parameter never sees
+/// the context.
+///
+/// For a plain function returning `()`, the `Arity` marker is
+/// [`WithoutContext`] or [`WithContext`], and the returned future is ready.
+/// An `async` function is accepted as well, with the `Arity` marker
+/// [`AsyncWithoutContext`] or [`AsyncWithContext`], and the returned future is
+/// the hook's own. As with [`DispatchHook`], every function matches exactly
+/// one marker, so the marker is always inferred.
+pub trait TransitionHook<'ctx, 'data: 'ctx, M: IntoStateMachine, Arity> {
+    /// Call the hook for a transition from `source` to `target`, forwarding
+    /// `context` if the hook takes it.
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, WithoutContext> for F
+where
+    M: IntoStateMachine,
+    F: Fn(&mut M, &M::State, &M::State),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, source, target);
+
+        core::future::ready(())
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, WithContext> for F
+where
+    M: IntoStateMachine,
+    F: Fn(&mut M, &M::State, &M::State, &mut M::Context<'ctx, 'data>),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, source, target, context);
+
+        core::future::ready(())
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, AsyncWithoutContext> for F
+where
+    M: IntoStateMachine,
+    F: AsyncFn(&mut M, &M::State, &M::State),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, source, target)
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> TransitionHook<'ctx, 'data, M, AsyncWithContext> for F
+where
+    M: IntoStateMachine,
+    F: AsyncFn(&mut M, &M::State, &M::State, &mut M::Context<'ctx, 'data>),
+{
+    fn call_transition_hook(
+        &self,
+        shared_storage: &mut M,
+        source: &M::State,
+        target: &M::State,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, source, target, context)
+    }
+}
