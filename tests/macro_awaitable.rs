@@ -98,3 +98,155 @@ fn async_handlers_and_actions_run_in_order() {
     );
     assert!(matches!(machine.state(), blinky::State::LedOff {}));
 }
+
+// MARK: Hooks
+
+mod deferrer {
+    use sotu::prelude::*;
+
+    use crate::common::pending_once::pending_once;
+
+    pub struct Tick;
+
+    #[derive(Event)]
+    pub enum Event {
+        Tick(Tick),
+    }
+
+    #[derive(Default)]
+    pub struct Deferrer {
+        pub trace: Vec<&'static str>,
+    }
+
+    fn label(
+        node: &StateOrSuperstate<'_, State, Superstate>,
+        leaf: &'static str,
+        group: &'static str,
+    ) -> &'static str {
+        match node {
+            StateOrSuperstate::State(State::Leaf {}) => leaf,
+            StateOrSuperstate::Superstate(Superstate::Group {}) => group,
+        }
+    }
+
+    #[state_machine(
+        initial = State::leaf(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after
+    )]
+    impl Deferrer {
+        fn before(&mut self, node: StateOrSuperstate<'_, State, Superstate>, _event: &Event) {
+            self.trace.push(label(&node, "before leaf", "before group"));
+        }
+
+        async fn after(&mut self, node: StateOrSuperstate<'_, State, Superstate>, _event: &Event) {
+            let entry = label(&node, "after leaf", "after group");
+
+            pending_once().await;
+
+            self.trace.push(entry);
+        }
+
+        #[state(superstate = group)]
+        fn leaf(&mut self, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Tick(_) => {
+                    self.trace.push("leaf");
+
+                    Super
+                }
+            }
+        }
+
+        #[superstate]
+        fn group(&mut self, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Tick(_) => {
+                    self.trace.push("group");
+
+                    Handled
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_plain_and_async_hooks_fire() {
+    let mut machine = deferrer::Deferrer::default().state_machine();
+
+    block_on(machine.handle(deferrer::Tick, &mut ()));
+
+    assert_eq!(
+        machine.trace,
+        [
+            "before leaf",
+            "leaf",
+            "after leaf",
+            "before group",
+            "group",
+            "after group"
+        ]
+    );
+}
+
+// MARK: Awaitable Flag
+
+mod flagged {
+    use sotu::prelude::*;
+
+    pub struct Press;
+
+    #[derive(Event)]
+    pub enum Event {
+        Press(Press),
+    }
+
+    #[derive(Default)]
+    pub struct Flagged {
+        pub trace: Vec<&'static str>,
+    }
+
+    #[state_machine(initial = State::idle(), awaitable)]
+    impl Flagged {
+        #[state(exit_action = leave_idle)]
+        fn idle(&mut self, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Press(_) => {
+                    self.trace.push("idle");
+
+                    Transition(State::busy())
+                }
+            }
+        }
+
+        #[state(entry_action = enter_busy)]
+        fn busy(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Press(_) => Handled,
+            }
+        }
+
+        #[action]
+        fn leave_idle(&mut self) {
+            self.trace.push("leave idle");
+        }
+
+        #[action]
+        fn enter_busy(&mut self) {
+            self.trace.push("enter busy");
+        }
+    }
+}
+
+#[test]
+fn awaitable_flag_without_async_items() {
+    let mut machine: sotu::awaitable::StateMachine<flagged::Flagged> =
+        flagged::Flagged::default().state_machine();
+
+    block_on(machine.handle(flagged::Press, &mut ()));
+
+    assert_eq!(machine.trace, ["idle", "leave idle", "enter busy"]);
+    assert!(matches!(machine.state(), flagged::State::Busy {}));
+}
+
