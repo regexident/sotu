@@ -308,6 +308,131 @@ macro_rules! owned_hierarchy_algorithms {
 
             depth
         }
+
+        /// Return how many levels a local transition from `source` to `target`
+        /// exits and enters, as `(exit_levels, enter_levels)`.
+        pub(crate) fn transition_path<M: IntoStateMachine>(
+            source: &mut M::State,
+            target: &mut M::State,
+        ) -> (usize, usize) {
+            let same_leaf = source.same_state(target);
+            let source_depth = state_depth::<M>(source);
+            let target_depth = state_depth::<M>(target);
+
+            // A leaf of depth 1 has no superstate, so its only common ancestor
+            // with any other leaf is the implicit top at depth 0.
+            let common_depth = match (source.superstate(), target.superstate()) {
+                (Some(source_superstate), Some(target_superstate)) => common_ancestor_depth::<M>(
+                    source_superstate,
+                    source_depth - 1,
+                    target_superstate,
+                    target_depth - 1,
+                ),
+                _ => 0,
+            };
+
+            crate::hierarchy::local_path(source_depth, target_depth, common_depth, same_leaf)
+        }
+
+        /// Return how many levels an external transition from `source` to
+        /// `target`, handled by the node at `handler_depth`, exits and enters,
+        /// as `(exit_levels, enter_levels)`.
+        ///
+        /// A `handler_depth` of `0` or beyond the depth of `source` names no
+        /// handling node, so the transition is treated as a local one.
+        pub(crate) fn external_transition_path<M: IntoStateMachine>(
+            source: &mut M::State,
+            target: &mut M::State,
+            handler_depth: usize,
+        ) -> (usize, usize) {
+            let source_depth = state_depth::<M>(source);
+            let target_depth = state_depth::<M>(target);
+
+            let target_inside_handler = if handler_depth == source_depth {
+                source.same_state(target)
+            } else if (1..source_depth).contains(&handler_depth) && target_depth > handler_depth {
+                // Both depths exceed `handler_depth`, so both leaves have a
+                // superstate.
+                let source_handler = source.superstate().and_then(|superstate| {
+                    superstate_at_depth::<M>(superstate, source_depth - 1, handler_depth)
+                });
+                let target_ancestor = target.superstate().and_then(|superstate| {
+                    superstate_at_depth::<M>(superstate, target_depth - 1, handler_depth)
+                });
+
+                match (source_handler, target_ancestor) {
+                    (Some(handler), Some(ancestor)) => handler.same_state(&ancestor),
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
+            let local = transition_path::<M>(source, target);
+
+            crate::hierarchy::external_path(
+                source_depth,
+                target_depth,
+                handler_depth,
+                target_inside_handler,
+                local,
+            )
+        }
+
+        /// Return the ancestor of `superstate` at `depth`, or `None` if the
+        /// chain ends above `depth`.
+        ///
+        /// `superstate_depth` is the depth of `superstate` and must not be
+        /// smaller than `depth`. A `depth` equal to it returns `superstate`.
+        fn superstate_at_depth<'sub, M: IntoStateMachine>(
+            mut superstate: M::Superstate<'sub>,
+            superstate_depth: usize,
+            depth: usize,
+        ) -> Option<M::Superstate<'sub>> {
+            for _ in depth..superstate_depth {
+                superstate = superstate.superstate()?;
+            }
+
+            Some(superstate)
+        }
+
+        /// Return the depth of the deepest superstate that is an ancestor of,
+        /// or the same node as, both `first` and `second`, or `0` if there is
+        /// none.
+        ///
+        /// `first_depth` and `second_depth` are the depths of the two
+        /// superstates.
+        fn common_ancestor_depth<M: IntoStateMachine>(
+            first: M::Superstate<'_>,
+            first_depth: usize,
+            second: M::Superstate<'_>,
+            second_depth: usize,
+        ) -> usize {
+            let mut depth = first_depth.min(second_depth);
+
+            let (Some(mut first), Some(mut second)) = (
+                superstate_at_depth::<M>(first, first_depth, depth),
+                superstate_at_depth::<M>(second, second_depth, depth),
+            ) else {
+                return 0;
+            };
+
+            loop {
+                if first.same_state(&second) {
+                    return depth;
+                }
+
+                let (Some(first_parent), Some(second_parent)) =
+                    (first.superstate(), second.superstate())
+                else {
+                    return 0;
+                };
+
+                first = first_parent;
+                second = second_parent;
+                depth -= 1;
+            }
+        }
     };
 }
 
