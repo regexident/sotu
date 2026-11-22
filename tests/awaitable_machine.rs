@@ -25,6 +25,16 @@ async fn machine_at(leaf: Leaf) -> InitializedStateMachine<AsyncTree> {
     machine
 }
 
+/// Return a machine terminated from `leaf` with an empty trace.
+async fn terminated_at(leaf: Leaf) -> InitializedStateMachine<AsyncTree> {
+    let mut machine = machine_at(leaf).await;
+
+    machine.handle(Input::Finish, &mut ()).await;
+    machine.inner_mut().trace.clear();
+
+    machine
+}
+
 fn dispatch_records(node: Node) -> [Record; 3] {
     [
         Record::BeforeDispatch(node),
@@ -149,5 +159,33 @@ fn terminated_machine_ignores_events() {
         assert_eq!(machine.trace, trace_at_termination);
         assert_eq!(machine.state(), &AsyncTreeState::C);
         assert_eq!(machine.exit(), Some(&Finished::Done));
+    });
+}
+
+#[test]
+fn restart_reenters_initial_state() {
+    block_on(async {
+        let mut machine = terminated_at(Leaf::C).await;
+
+        machine.restart(&mut ()).await;
+
+        assert_eq!(
+            machine.trace,
+            [Record::Entry(Node::A), Record::Entry(Node::A1)],
+        );
+        assert_eq!(machine.exit(), None);
+        assert!(!machine.is_terminated());
+        assert_eq!(machine.state(), &AsyncTreeState::A1);
+    });
+}
+
+#[test]
+fn into_exit_returns_owned_exit() {
+    block_on(async {
+        assert_eq!(
+            terminated_at(Leaf::C).await.into_exit(),
+            Some(Finished::Done)
+        );
+        assert_eq!(machine_at(Leaf::C).await.into_exit(), None);
     });
 }

@@ -89,15 +89,17 @@ impl<M: IntoStateMachine> Deref for UninitializedStateMachine<M> {
 ///
 /// The machine terminates when an [`Outcome::Exit`](crate::Outcome::Exit)
 /// reaches it. A terminated machine keeps its last state for inspection and
-/// ignores events.
+/// ignores events until [`restart`](InitializedStateMachine::restart) is
+/// awaited.
 ///
 /// # Cancellation
 ///
 /// The machine records its progress after every completed action and hook of
-/// a transition or a termination. If the future of
-/// [`handle`](InitializedStateMachine::handle) or
-/// [`step`](InitializedStateMachine::step) is dropped while it awaits one of
-/// them, the next of these calls first completes the interrupted work. The
+/// an initialization, a transition or a termination. If the future of
+/// [`handle`](InitializedStateMachine::handle),
+/// [`step`](InitializedStateMachine::step) or
+/// [`restart`](InitializedStateMachine::restart) is dropped while it awaits one
+/// of them, the next of these calls first completes the interrupted work. The
 /// interrupted action or hook runs again from its start, and every completed
 /// one is never repeated.
 ///
@@ -204,6 +206,15 @@ impl<M: IntoStateMachine> InitializedStateMachine<M> {
         self.handle((), context).await
     }
 
+    /// Complete any interrupted work, then reset a terminated machine to
+    /// [`IntoStateMachine::initial`], clear its exit value and await the
+    /// initial entry actions again.
+    ///
+    /// Does nothing else on a running machine. The shared storage is kept.
+    pub async fn restart(&mut self, context: &mut M::Context<'_, '_>) {
+        self.inner.restart(context).await;
+    }
+
     /// Return whether the machine has terminated.
     pub fn is_terminated(&self) -> bool {
         self.inner.exit.is_some()
@@ -212,6 +223,12 @@ impl<M: IntoStateMachine> InitializedStateMachine<M> {
     /// Return the exit value of a terminated machine, or `None` while it runs.
     pub fn exit(&self) -> Option<&M::Exit> {
         self.inner.exit.as_ref()
+    }
+
+    /// Consume the machine and return its exit value, or `None` if it has not
+    /// terminated.
+    pub fn into_exit(self) -> Option<M::Exit> {
+        self.inner.exit
     }
 
     /// Return a reference to the current leaf state.
