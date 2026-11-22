@@ -12,6 +12,14 @@ pub struct WithContext;
 /// parameter.
 pub struct WithoutContext;
 
+/// Marker selecting the hook adapters for `async` functions that take a
+/// trailing context parameter.
+pub struct AsyncWithContext;
+
+/// Marker selecting the hook adapters for `async` functions that take no
+/// context parameter.
+pub struct AsyncWithoutContext;
+
 /// The result of dispatching an event to a single node.
 ///
 /// Extends [`Outcome`] with the offsets that mounted child machines need to
