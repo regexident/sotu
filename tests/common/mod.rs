@@ -2,6 +2,8 @@
 // items are expected in any single crate.
 #![allow(dead_code)]
 
+#[cfg(feature = "async")]
+pub mod async_tree;
 pub mod bare;
 #[cfg(feature = "async")]
 pub mod pending_once;
