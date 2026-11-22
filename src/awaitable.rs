@@ -29,11 +29,14 @@
 //! [`State::superstate`] still borrows the leaf state, because the leaf
 //! outlives every superstate built from it.
 
+mod ext;
 mod hook;
 mod into_state_machine;
 mod state;
 mod superstate;
 
+pub use ext::StateExt;
+pub use ext::SuperstateExt;
 pub use hook::DispatchHook;
 pub use hook::TransitionHook;
 pub use into_state_machine::IntoStateMachine;
