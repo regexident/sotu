@@ -124,6 +124,66 @@ impl<M: IntoStateMachine> InitializedStateMachine<M> {
     /// the entry actions outermost first on the new state, and the root's
     /// `after_transition` hook. Termination awaits the exit actions of every
     /// level of the active leaf, innermost first, and fires no transition hook.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use core::convert::Infallible;
+    ///
+    /// use futures::executor::block_on;
+    /// use sotu::awaitable::{IntoStateMachine, State};
+    /// use sotu::prelude::*;
+    ///
+    /// #[derive(Default)]
+    /// struct Light {
+    ///     toggles: u32,
+    /// }
+    ///
+    /// #[derive(Eq, PartialEq, Debug)]
+    /// enum LightState {
+    ///     Off,
+    ///     On,
+    /// }
+    ///
+    /// impl IntoStateMachine for Light {
+    ///     type Event = ();
+    ///     type Context<'ctx, 'data: 'ctx> = ();
+    ///     type State = LightState;
+    ///     type Superstate<'sub> = ();
+    ///     type Exit = Infallible;
+    ///
+    ///     fn initial() -> LightState {
+    ///         LightState::Off
+    ///     }
+    /// }
+    ///
+    /// impl State<Light> for LightState {
+    ///     async fn call_handler<'ctx, 'data: 'ctx>(
+    ///         &mut self,
+    ///         shared_storage: &mut Light,
+    ///         _event: &(),
+    ///         _context: &mut (),
+    ///     ) -> Outcome<LightState, Infallible> {
+    ///         shared_storage.toggles += 1;
+    ///
+    ///         match self {
+    ///             LightState::Off => Outcome::Transition(LightState::On),
+    ///             LightState::On => Outcome::Transition(LightState::Off),
+    ///         }
+    ///     }
+    /// }
+    ///
+    /// block_on(async {
+    ///     let mut machine = Light::default()
+    ///         .uninitialized_state_machine()
+    ///         .init(&mut ())
+    ///         .await;
+    ///
+    ///     assert_eq!(machine.handle((), &mut ()).await, None);
+    ///     assert_eq!(machine.state(), &LightState::On);
+    ///     assert_eq!(machine.toggles, 1);
+    /// });
+    /// ```
     pub async fn handle(
         &mut self,
         event: impl Into<M::Event>,
