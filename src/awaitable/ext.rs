@@ -27,6 +27,43 @@ pub trait StateExt<M: IntoStateMachine>: State<M> {
         target: &mut Self,
         handler_depth: usize,
     ) -> (usize, usize);
+
+    /// Await the entry action of the node `level` levels above this state.
+    ///
+    /// Does nothing if `level` is not smaller than the depth of this state.
+    fn enter_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) -> impl Future<Output = ()>;
+
+    /// Await the exit action of the node `level` levels above this state.
+    ///
+    /// Does nothing if `level` is not smaller than the depth of this state.
+    fn exit_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) -> impl Future<Output = ()>;
+
+    /// Await the entry actions of the lowest `levels` levels, outermost
+    /// first.
+    fn enter<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) -> impl Future<Output = ()>;
+
+    /// Await the exit actions of the lowest `levels` levels, innermost first.
+    fn exit<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) -> impl Future<Output = ()>;
 }
 
 impl<M, S> StateExt<M> for S
@@ -49,6 +86,72 @@ where
     ) -> (usize, usize) {
         external_transition_path::<M>(self, target, handler_depth)
     }
+
+    async fn enter_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) {
+        if level == 0 {
+            self.call_entry_action(shared_storage, context).await;
+        } else if let Some(mut superstate) = superstate_at_level::<M>(self, level) {
+            superstate.call_entry_action(shared_storage, context).await;
+        }
+    }
+
+    async fn exit_level<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        level: usize,
+    ) {
+        if level == 0 {
+            self.call_exit_action(shared_storage, context).await;
+        } else if let Some(mut superstate) = superstate_at_level::<M>(self, level) {
+            superstate.call_exit_action(shared_storage, context).await;
+        }
+    }
+
+    async fn enter<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) {
+        for level in (0..levels).rev() {
+            self.enter_level(shared_storage, context, level).await;
+        }
+    }
+
+    async fn exit<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        context: &mut M::Context<'ctx, 'data>,
+        levels: usize,
+    ) {
+        for level in 0..levels {
+            self.exit_level(shared_storage, context, level).await;
+        }
+    }
+}
+
+/// Return the superstate `level` levels above `state`, or `None` if the
+/// hierarchy above `state` has fewer levels.
+///
+/// `level` must be at least 1. The chain is stepped synchronously before any
+/// action is awaited, so the returned superstate is the only one alive.
+fn superstate_at_level<M: IntoStateMachine>(
+    state: &mut M::State,
+    level: usize,
+) -> Option<M::Superstate<'_>> {
+    let mut superstate = state.superstate()?;
+
+    for _ in 1..level {
+        superstate = superstate.superstate()?;
+    }
+
+    Some(superstate)
 }
 
 /// Hierarchy queries for superstates.
