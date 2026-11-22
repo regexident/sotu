@@ -29,7 +29,7 @@ pub use sotu_macros::{Event, action, exit_handler, state, state_machine, submach
 /// Common imports for writing state machines.
 pub mod prelude {
     #[cfg(feature = "async")]
-    pub use crate::awaitable::{StateExt as _, SuperstateExt as _};
+    pub use crate::awaitable::{IntoStateMachineExt as _, StateExt as _, SuperstateExt as _};
     pub use crate::blocking::{
         InitializedStateMachine, IntoStateMachine, State, StateMachine, Superstate,
         UninitializedStateMachine,

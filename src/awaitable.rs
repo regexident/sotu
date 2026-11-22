@@ -12,6 +12,12 @@
 //! allocator nor a particular executor, and the returned futures carry no
 //! `Send` bound.
 //!
+//! [`IntoStateMachineExt::uninitialized_state_machine`] wraps the shared
+//! storage in an [`UninitializedStateMachine`], and awaiting its `init` method
+//! returns the [`InitializedStateMachine`] that handles events. The prelude
+//! brings the extension trait into scope but not the wrapper types, whose
+//! names equal those of the blocking wrappers.
+//!
 //! A blocking machine never implements these traits, so a type is a machine
 //! of exactly one mode and method calls through the prelude stay unambiguous.
 //!
@@ -31,8 +37,10 @@
 
 mod ext;
 mod hook;
+mod inner;
 mod into_state_machine;
 mod state;
+mod state_machine;
 mod superstate;
 
 pub use ext::StateExt;
@@ -41,4 +49,7 @@ pub use hook::DispatchHook;
 pub use hook::TransitionHook;
 pub use into_state_machine::IntoStateMachine;
 pub use state::State;
+pub use state_machine::InitializedStateMachine;
+pub use state_machine::IntoStateMachineExt;
+pub use state_machine::UninitializedStateMachine;
 pub use superstate::Superstate;
