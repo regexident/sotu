@@ -394,3 +394,185 @@ fn awaitable_machine_terminates_and_restarts() {
     assert_eq!(machine.trace, ["enter running", "enter running"]);
 }
 
+// MARK: Resumption
+
+mod nested {
+    use std::cell::Cell;
+
+    use sotu::prelude::*;
+
+    use crate::common::pending_once::pending_once;
+
+    // The test harness runs each test on its own thread, so concurrent tests
+    // never see each other's starts.
+    std::thread_local! {
+        static STARTS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    /// Return how many actions and hooks have started on the current thread
+    /// since the last [`reset_starts`].
+    pub fn starts() -> u32 {
+        STARTS.get()
+    }
+
+    /// Reset the start count of the current thread to zero.
+    pub fn reset_starts() {
+        STARTS.set(0);
+    }
+
+    /// Count a start, then suspend once before the step takes effect.
+    async fn start() {
+        STARTS.set(STARTS.get() + 1);
+        pending_once().await;
+    }
+
+    pub struct Go;
+    pub struct Ignore;
+
+    #[derive(Event)]
+    pub enum Event {
+        Go(Go),
+        Ignore(Ignore),
+    }
+
+    #[derive(Default)]
+    pub struct Nested {
+        pub trace: Vec<&'static str>,
+    }
+
+    // The handlers are plain, so a handled event is always dispatched on the
+    // first poll and only the transition can be interrupted.
+    #[state_machine(
+        initial = State::inner_leaf(),
+        before_transition = Self::before_transition,
+        after_transition = Self::after_transition
+    )]
+    impl Nested {
+        async fn before_transition(&mut self, _source: &State, _target: &State) {
+            start().await;
+
+            self.trace.push("before transition");
+        }
+
+        async fn after_transition(&mut self, _source: &State, _target: &State) {
+            start().await;
+
+            self.trace.push("after transition");
+        }
+
+        #[superstate(exit_action = exit_outer)]
+        fn outer() -> Outcome<State> {
+            Super
+        }
+
+        #[superstate(superstate = outer, exit_action = exit_inner)]
+        fn inner() -> Outcome<State> {
+            Super
+        }
+
+        #[state(superstate = inner, exit_action = exit_inner_leaf)]
+        fn inner_leaf(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Go(_) => Transition(State::top_leaf()),
+                Event::Ignore(_) => Handled,
+            }
+        }
+
+        #[state(entry_action = enter_top_leaf)]
+        fn top_leaf(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Go(_) | Event::Ignore(_) => Handled,
+            }
+        }
+
+        #[action]
+        async fn exit_outer(&mut self) {
+            start().await;
+
+            self.trace.push("exit outer");
+        }
+
+        #[action]
+        async fn exit_inner(&mut self) {
+            start().await;
+
+            self.trace.push("exit inner");
+        }
+
+        #[action]
+        async fn exit_inner_leaf(&mut self) {
+            start().await;
+
+            self.trace.push("exit inner_leaf");
+        }
+
+        #[action]
+        async fn enter_top_leaf(&mut self) {
+            start().await;
+
+            self.trace.push("enter top_leaf");
+        }
+    }
+}
+
+/// Return an initialized `Nested` machine with an empty trace and the start
+/// count reset.
+fn initialized_nested() -> sotu::awaitable::InitializedStateMachine<nested::Nested> {
+    let mut machine = block_on(
+        nested::Nested::default()
+            .uninitialized_state_machine()
+            .init(&mut ()),
+    );
+
+    machine.inner_mut().trace.clear();
+    nested::reset_starts();
+
+    machine
+}
+
+#[test_strategy::proptest]
+fn generated_machine_resumes_after_dropped_future(#[strategy(0usize..16)] polls: usize) {
+    let mut reference = initialized_nested();
+
+    block_on(reference.handle(nested::Go, &mut ()));
+
+    let records = std::mem::take(&mut reference.inner_mut().trace);
+    let step_starts = nested::starts();
+
+    proptest::prop_assert_eq!(
+        &records,
+        &[
+            "before transition",
+            "exit inner_leaf",
+            "exit inner",
+            "exit outer",
+            "enter top_leaf",
+            "after transition"
+        ]
+    );
+
+    let mut machine = initialized_nested();
+    let completed = common::interrupt::poll_then_drop(machine.handle(nested::Go, &mut ()), polls);
+
+    if !completed {
+        // An unpolled future never dispatched the event, so it is handled
+        // again. Otherwise the next call completes the interrupted transition
+        // first, and the ignored event leaves no record.
+        if polls == 0 {
+            block_on(machine.handle(nested::Go, &mut ()));
+        } else {
+            block_on(machine.handle(nested::Ignore, &mut ()));
+        }
+    }
+
+    // A future dropped after at least one poll interrupted exactly one
+    // started step, which resuming runs again.
+    let repeated = u32::from(!completed && polls > 0);
+
+    let at_top_leaf = matches!(machine.state(), nested::State::TopLeaf {});
+
+    proptest::prop_assert_eq!(&machine.trace, &records);
+    proptest::prop_assert_eq!(nested::starts(), step_starts + repeated);
+    proptest::prop_assert!(at_top_leaf);
+    proptest::prop_assert!(!machine.is_terminated());
+}
