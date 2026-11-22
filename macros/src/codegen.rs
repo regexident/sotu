@@ -18,6 +18,11 @@ use crate::lower::{
 // MARK: Generation
 
 /// Generate the impl block, the node enums and the trait implementations of a machine.
+///
+/// The traits are those of `sotu::blocking` or of `sotu::awaitable`, as
+/// [`Ir::mode`] selects. Analysis rejects mounts in awaitable machines, so the
+/// mount items, which are blocking only, are generated for blocking machines
+/// alone.
 pub(crate) fn generate(ir: &Ir) -> TokenStream {
     let mode = ir.mode;
     let item = &ir.item;
@@ -33,13 +38,13 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         .as_ref()
         .map(|superstate| superstate_enum(superstate, mounts));
 
-    let into_state_machine = into_state_machine_impl(&ir.machine);
-    let dispatch = dispatch_impl(&ir.dispatch, mounts);
+    let into_state_machine = into_state_machine_impl(&ir.machine, mode);
+    let dispatch = dispatch_impl(&ir.dispatch, mounts, mode);
 
     let superstate_dispatch = ir
         .superstate
         .as_ref()
-        .map(|superstate| superstate_dispatch_impl(superstate, mounts));
+        .map(|superstate| superstate_dispatch_impl(superstate, mounts, mode));
 
     let submachine = submachine_impls(&ir.machine, mode);
     let projection = projection_impl(&ir.machine, mounts);
@@ -60,6 +65,43 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         #submachine
 
         #projection
+    }
+}
+
+// MARK: Modes
+
+/// Return the module of `sotu` whose traits a machine of `mode` implements.
+fn mode_module(mode: Mode) -> TokenStream {
+    match mode {
+        Mode::Blocking => quote!(::sotu::blocking),
+        Mode::Awaitable => quote!(::sotu::awaitable),
+    }
+}
+
+/// Generate the return type of a trait method whose blocking form returns
+/// `output`, or nothing for `None`.
+///
+/// An awaitable method returns a future of the same output instead.
+fn method_output(mode: Mode, output: Option<&TokenStream>) -> Option<TokenStream> {
+    match (mode, output) {
+        (Mode::Blocking, Some(output)) => Some(quote!(-> #output)),
+        (Mode::Blocking, None) => None,
+        (Mode::Awaitable, Some(output)) => {
+            Some(quote!(-> impl ::core::future::Future<Output = #output>))
+        }
+        (Mode::Awaitable, None) => Some(quote!(-> impl ::core::future::Future<Output = ()>)),
+    }
+}
+
+/// Generate the body of a handler or action method from the blocking `body`.
+///
+/// An awaitable method wraps `body` in an `async move` block, which takes the
+/// method's references along, so the returned future borrows the node, the
+/// shared storage, the event and the context for as long as it runs.
+fn method_body(mode: Mode, body: TokenStream) -> TokenStream {
+    match mode {
+        Mode::Blocking => body,
+        Mode::Awaitable => quote!(async move { #body }),
     }
 }
 
@@ -294,14 +336,15 @@ fn superstate_enum(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream
 
 // MARK: Machine Traits
 
-fn into_state_machine_impl(machine: &MachineIr) -> TokenStream {
+fn into_state_machine_impl(machine: &MachineIr, mode: Mode) -> TokenStream {
     let shared_storage = &machine.shared_storage;
     let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
-    let hooks = hook_methods(machine);
+    let hooks = hook_methods(machine, mode);
+    let module = mode_module(mode);
 
     quote! {
-        impl #impl_generics ::sotu::blocking::IntoStateMachine for #shared_storage #where_clause {
+        impl #impl_generics #module::IntoStateMachine for #shared_storage #where_clause {
             #items
 
             #hooks
@@ -313,7 +356,9 @@ fn into_state_machine_impl(machine: &MachineIr) -> TokenStream {
 /// adapter that accepts the hook with or without a context parameter.
 ///
 /// An absent key generates no method, which keeps the no-op default of the trait.
-fn hook_methods(machine: &MachineIr) -> TokenStream {
+/// An awaitable hook method returns the adapter's future, which is the hook's
+/// own for an `async` function and a ready one for a plain function.
+fn hook_methods(machine: &MachineIr, mode: Mode) -> TokenStream {
     let HooksModel {
         before_dispatch,
         after_dispatch,
@@ -323,19 +368,19 @@ fn hook_methods(machine: &MachineIr) -> TokenStream {
 
     let before_dispatch = before_dispatch
         .as_ref()
-        .map(|path| dispatch_hook(machine, &format_ident!("before_dispatch"), path));
+        .map(|path| dispatch_hook(machine, &format_ident!("before_dispatch"), path, mode));
 
     let after_dispatch = after_dispatch
         .as_ref()
-        .map(|path| dispatch_hook(machine, &format_ident!("after_dispatch"), path));
+        .map(|path| dispatch_hook(machine, &format_ident!("after_dispatch"), path, mode));
 
     let before_transition = before_transition
         .as_ref()
-        .map(|path| transition_hook(machine, &format_ident!("before_transition"), path));
+        .map(|path| transition_hook(machine, &format_ident!("before_transition"), path, mode));
 
     let after_transition = after_transition
         .as_ref()
-        .map(|path| transition_hook(machine, &format_ident!("after_transition"), path));
+        .map(|path| transition_hook(machine, &format_ident!("after_transition"), path, mode));
 
     quote! {
         #before_dispatch
@@ -348,7 +393,7 @@ fn hook_methods(machine: &MachineIr) -> TokenStream {
     }
 }
 
-fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStream {
+fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path, mode: Mode) -> TokenStream {
     let MachineIr {
         event_type,
         context_type,
@@ -358,11 +403,19 @@ fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStrea
     } = machine;
 
     let state = state_type(state);
+    let module = mode_module(mode);
 
-    let superstate = match superstate {
-        Some(ty) => superstate_type(ty, &quote!('_)),
-        None => quote!(()),
+    // The future that the awaitable trait method returns captures the lifetime
+    // in `Self::Superstate<'_>`, and a lifetime that appears only in a
+    // projection is early-bound. The impl names the superstate through the
+    // same projection, so that it declares the same lifetime parameters.
+    let superstate = match (mode, superstate) {
+        (Mode::Awaitable, _) => quote!(<Self as #module::IntoStateMachine>::Superstate<'_>),
+        (Mode::Blocking, Some(ty)) => superstate_type(ty, &quote!('_)),
+        (Mode::Blocking, None) => quote!(()),
     };
+
+    let output = method_output(mode, None);
 
     quote! {
         fn #method<'ctx, 'data: 'ctx>(
@@ -370,13 +423,13 @@ fn dispatch_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStrea
             node: ::sotu::StateOrSuperstate<'_, #state, #superstate>,
             event: &#event_type,
             context: &mut #context_type,
-        ) {
-            ::sotu::blocking::DispatchHook::call_dispatch_hook(&(#path), self, node, event, context)
+        ) #output {
+            #module::DispatchHook::call_dispatch_hook(&(#path), self, node, event, context)
         }
     }
 }
 
-fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStream {
+fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path, mode: Mode) -> TokenStream {
     let MachineIr {
         context_type,
         state,
@@ -384,6 +437,8 @@ fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStr
     } = machine;
 
     let state = state_type(state);
+    let module = mode_module(mode);
+    let output = method_output(mode, None);
 
     quote! {
         fn #method<'ctx, 'data: 'ctx>(
@@ -391,8 +446,8 @@ fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStr
             source: &#state,
             target: &#state,
             context: &mut #context_type,
-        ) {
-            ::sotu::blocking::TransitionHook::call_transition_hook(
+        ) #output {
+            #module::TransitionHook::call_transition_hook(
                 &(#path),
                 self,
                 source,
@@ -475,7 +530,7 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
 
 // MARK: State Dispatch
 
-fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
+fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> TokenStream {
     let DispatchIr {
         shared_storage,
         generics,
@@ -533,6 +588,7 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
             actions.as_ref(),
             &leaves,
             mount_arms.collect(),
+            mode,
         )
     });
 
@@ -552,18 +608,27 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
 
     let generics = with_mount_bounds(generics, mounts);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let module = mode_module(mode);
+    let output = method_output(mode, Some(&quote!(::sotu::Outcome<Self, #exit_type>)));
+
+    let body = method_body(
+        mode,
+        quote! {
+            match self {
+                #(#arms)*
+            }
+        },
+    );
 
     quote! {
-        impl #impl_generics ::sotu::blocking::State<#shared_storage> for #state #where_clause {
+        impl #impl_generics #module::State<#shared_storage> for #state #where_clause {
             fn call_handler<'ctx, 'data: 'ctx>(
                 &mut self,
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
                 #context_parameter: &mut #context_type,
-            ) -> ::sotu::Outcome<Self, #exit_type> {
-                match self {
-                    #(#arms)*
-                }
+            ) #output {
+                #body
             }
 
             #entry_action
@@ -691,7 +756,11 @@ fn with_mount_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
 
 // MARK: Superstate Dispatch
 
-fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream {
+fn superstate_dispatch_impl(
+    superstate: &SuperstateIr,
+    mounts: &[MountIr],
+    mode: Mode,
+) -> TokenStream {
     let SuperstateIr {
         ty,
         visibility: _,
@@ -754,14 +823,20 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
             actions.as_ref(),
             &composites,
             mount_arms.collect(),
+            mode,
         )
     });
 
-    let lifted = mounts
-        .iter()
-        .map(|mount| lifted_superstate_parent_arms(name, mount));
+    let parents = match mode {
+        Mode::Blocking => {
+            let lifted = mounts
+                .iter()
+                .map(|mount| lifted_superstate_parent_arms(name, mount));
 
-    let parents = parent_method(name, parents, lifted.collect());
+            parent_method(name, parents, lifted.collect())
+        }
+        Mode::Awaitable => consuming_parent_method(name, parents),
+    };
 
     let same_variant_arms = variants.iter().map(|variant| {
         let variant_name = &variant.name;
@@ -783,9 +858,20 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
         (variants.len() > 1 || !mounts.is_empty()).then(|| quote!(_ => false,));
 
     let boundary = (!mounts.is_empty()).then(|| superstate_boundary_methods(superstate, mounts));
+    let module = mode_module(mode);
+    let output = method_output(mode, Some(&quote!(::sotu::Outcome<#state, #exit_type>)));
+
+    let body = method_body(
+        mode,
+        quote! {
+            match self {
+                #(#arms)*
+            }
+        },
+    );
 
     quote! {
-        impl #impl_generics ::sotu::blocking::Superstate<#shared_storage> for #declared
+        impl #impl_generics #module::Superstate<#shared_storage> for #declared
         #where_clause
         {
             fn call_handler<'ctx, 'data: 'ctx>(
@@ -793,10 +879,8 @@ fn superstate_dispatch_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> To
                 #shared_storage_parameter: &mut #shared_storage,
                 #event_parameter: &#event_type,
                 #context_parameter: &mut #context_type,
-            ) -> ::sotu::Outcome<#state, #exit_type> {
-                match self {
-                    #(#arms)*
-                }
+            ) #output {
+                #body
             }
 
             #entry_action
@@ -929,6 +1013,7 @@ fn action_method(
     context_type: &Type,
     method: &Ident,
     actions: &ActionDispatchIr,
+    mode: Mode,
 ) -> TokenStream {
     let shared_storage_parameter = &actions.shared_storage_parameter;
     let context_parameter = &actions.context_parameter;
@@ -938,15 +1023,24 @@ fn action_method(
         .iter()
         .map(|arm| action_arm(enum_name, shared_storage, arm));
 
+    let output = method_output(mode, None);
+
+    let body = method_body(
+        mode,
+        quote! {
+            match self {
+                #(#arms)*
+            }
+        },
+    );
+
     quote! {
         fn #method<'ctx, 'data: 'ctx>(
             &mut self,
             #shared_storage_parameter: &mut #shared_storage,
             #context_parameter: &mut #context_type,
-        ) {
-            match self {
-                #(#arms)*
-            }
+        ) #output {
+            #body
         }
     }
 }
@@ -968,6 +1062,25 @@ fn parent_method(
 
     quote! {
         fn superstate(&mut self) -> ::core::option::Option<#elided> {
+            match self {
+                #(#arms)*
+            }
+        }
+    }
+}
+
+/// Generate the consuming `superstate` of an awaitable superstate enum, which
+/// moves the fields that the parent borrows from `self` into the parent.
+///
+/// Mounts are blocking only, so the enum has no mount variants to lift.
+fn consuming_parent_method(enum_name: &Ident, parents: &ParentDispatchIr) -> TokenStream {
+    let arms = parents
+        .arms
+        .iter()
+        .map(|arm| parent_arm(enum_name, &parents.superstate.name, arm));
+
+    quote! {
+        fn superstate(self) -> ::core::option::Option<Self> {
             match self {
                 #(#arms)*
             }
@@ -1058,12 +1171,17 @@ fn call(shared_storage: &Type, call: &CallIr) -> TokenStream {
     let CallIr {
         function,
         arguments,
+        is_async,
     } = call;
 
     let path = expression_path(shared_storage);
 
+    // Only an awaitable machine has `async` functions, and its calls sit in
+    // the `async move` blocks of its methods.
+    let awaited = is_async.then(|| quote!(.await));
+
     quote! {
-        #path::#function(#(#arguments),*)
+        #path::#function(#(#arguments),*)#awaited
     }
 }
 
@@ -1095,7 +1213,11 @@ fn expression_path(ty: &Type) -> TokenStream {
 /// Otherwise it always exists, because entering and leaving a mount creates
 /// and drops the child's instance and runs the child's actions. Each of the
 /// `variants` then gets an arm from `actions`, or an empty arm if no node of
-/// the enum has an action.
+/// the enum has an action. A machine with mounts is always blocking, so
+/// `mode` only shapes the method without them.
+// Each argument comes from a different part of the lowered machine, and a
+// struct bundling them would be built at the two call sites alone.
+#[allow(clippy::too_many_arguments)]
 fn lifecycle_method(
     enum_name: &Ident,
     shared_storage: &Type,
@@ -1104,10 +1226,18 @@ fn lifecycle_method(
     actions: Option<&ActionDispatchIr>,
     variants: &[&Ident],
     mount_arms: Vec<TokenStream>,
+    mode: Mode,
 ) -> Option<TokenStream> {
     if mount_arms.is_empty() {
         return actions.map(|actions| {
-            action_method(enum_name, shared_storage, context_type, method, actions)
+            action_method(
+                enum_name,
+                shared_storage,
+                context_type,
+                method,
+                actions,
+                mode,
+            )
         });
     }
 

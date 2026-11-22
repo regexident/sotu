@@ -28,7 +28,7 @@ pub(crate) struct Ir {
     pub(crate) state_enum: Option<StateEnumIr>,
     /// The associated types and `initial` of the machine traits.
     pub(crate) machine: MachineIr,
-    /// The implementation of the blocking `State` trait.
+    /// The implementation of the `State` trait of the machine's mode.
     pub(crate) dispatch: DispatchIr,
     /// The generated superstate enum, if the machine has superstates or mounts.
     pub(crate) superstate: Option<SuperstateIr>,
@@ -150,7 +150,7 @@ pub(crate) struct MachineIr {
     pub(crate) hooks: HooksModel,
 }
 
-/// The implementation of the blocking `State` trait.
+/// The implementation of the `State` trait of the machine's mode.
 pub(crate) struct DispatchIr {
     /// The type the handlers belong to.
     pub(crate) shared_storage: Type,
@@ -194,8 +194,8 @@ pub(crate) struct NodeTypeIr {
     pub(crate) generics: Generics,
 }
 
-/// The generated superstate enum and the implementation of the blocking
-/// `Superstate` trait.
+/// The generated superstate enum and the implementation of the `Superstate`
+/// trait of the machine's mode.
 pub(crate) struct SuperstateIr {
     /// The type of the enum.
     pub(crate) ty: NodeTypeIr,
@@ -329,6 +329,8 @@ pub(crate) struct CallIr {
     pub(crate) function: Ident,
     /// The arguments of the call, in the order the function declares its inputs.
     pub(crate) arguments: Vec<Ident>,
+    /// Whether the function is an `async fn`, whose future the call awaits.
+    pub(crate) is_async: bool,
 }
 
 /// A node that other nodes link to with `superstate = handler`.
@@ -403,7 +405,13 @@ pub(crate) fn lower(model: &Model) -> Ir {
                 .states
                 .iter()
                 .map(|state| {
-                    lower_arm(&state.variant, &state.fields, &state.handler, &state.inputs)
+                    lower_arm(
+                        &state.variant,
+                        &state.fields,
+                        &state.handler,
+                        &state.inputs,
+                        state.is_async,
+                    )
                 })
                 .collect(),
             entry_actions: lower_state_actions(model, |state| state.entry_action.as_ref()),
@@ -436,7 +444,7 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         context: mount.context.clone(),
         state_type: mount_state_type(mount),
         superstate_type: mount_superstate_type(mount),
-        handler: lower_call(&mount.handler, &mount.inputs),
+        handler: lower_call(&mount.handler, &mount.inputs, mount.is_async),
         takes_submachine: mount.inputs.contains(&InputKind::Submachine),
         entry_action: lower_mount_action(&model.actions, mount.entry_action.as_ref()),
         exit_action: lower_mount_action(&model.actions, mount.exit_action.as_ref()),
@@ -453,7 +461,7 @@ fn lower_mount_action(actions: &[ActionModel], name: Option<&Ident>) -> Option<M
     let action = actions.iter().find(|action| action.name == *name)?;
 
     Some(MountActionIr {
-        call: lower_call(&action.name, &action.inputs),
+        call: lower_call(&action.name, &action.inputs, action.is_async),
         takes_submachine: action.inputs.contains(&InputKind::Submachine),
     })
 }
@@ -469,7 +477,11 @@ fn lower_exit_handler(model: &Model, name: Option<&Ident>) -> Option<MountAction
         .find(|exit_handler| exit_handler.name == *name)?;
 
     Some(MountActionIr {
-        call: lower_call(&exit_handler.name, &exit_handler.inputs),
+        call: lower_call(
+            &exit_handler.name,
+            &exit_handler.inputs,
+            exit_handler.is_async,
+        ),
         takes_submachine: exit_handler.inputs.contains(&InputKind::Submachine),
     })
 }
@@ -517,10 +529,11 @@ fn lower_arm(
     fields: &[FieldModel],
     handler: &Ident,
     inputs: &[InputKind],
+    is_async: bool,
 ) -> ArmIr {
     ArmIr {
         pattern: lower_pattern(variant, fields, inputs),
-        call: lower_call(handler, inputs),
+        call: lower_call(handler, inputs, is_async),
     }
 }
 
@@ -810,6 +823,7 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
                     &superstate.fields,
                     &superstate.handler,
                     &superstate.inputs,
+                    superstate.is_async,
                 )
             })
             .collect(),
@@ -858,8 +872,11 @@ fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDisp
             .map(|child| {
                 let parent = find_parent(model, child.superstate.as_ref());
 
+                // The blocking `superstate` borrows its receiver, so the
+                // parent reborrows the child's fields. The awaitable one
+                // consumes it, so the parent takes the child's fields over.
                 lower_parent_arm(&child.variant, &child.fields, parent, |field| {
-                    Some(reborrow(field))
+                    (model.mode == Mode::Blocking).then(|| reborrow(field))
                 })
             })
             .collect(),
@@ -1024,7 +1041,7 @@ fn lower_action_arm(node: &ActionNode<'_>, action: Option<&ActionModel>) -> Acti
     match action {
         Some(action) => ActionArmIr {
             pattern: lower_pattern(node.variant, node.fields, &action.inputs),
-            call: Some(lower_call(&action.name, &action.inputs)),
+            call: Some(lower_call(&action.name, &action.inputs, action.is_async)),
         },
         None => ActionArmIr {
             pattern: lower_pattern(node.variant, node.fields, &[]),
@@ -1055,10 +1072,11 @@ fn lower_pattern(variant: &Ident, fields: &[FieldModel], inputs: &[InputKind]) -
     }
 }
 
-fn lower_call(function: &Ident, inputs: &[InputKind]) -> CallIr {
+fn lower_call(function: &Ident, inputs: &[InputKind], is_async: bool) -> CallIr {
     CallIr {
         function: function.clone(),
         arguments: inputs.iter().map(argument).collect(),
+        is_async,
     }
 }
 
