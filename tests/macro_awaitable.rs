@@ -250,3 +250,147 @@ fn awaitable_flag_without_async_items() {
     assert!(matches!(machine.state(), flagged::State::Busy {}));
 }
 
+// MARK: Borrowed Superstate Storage
+
+mod counter {
+    use sotu::prelude::*;
+
+    use crate::common::pending_once::pending_once;
+
+    pub struct Bump;
+
+    #[derive(Event)]
+    pub enum Event {
+        Bump(Bump),
+    }
+
+    #[derive(Default)]
+    pub struct Counter {
+        pub seen: Vec<u32>,
+    }
+
+    #[state_machine(initial = State::on(0))]
+    impl Counter {
+        #[superstate]
+        fn outer(&mut self, counter: &u32, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Bump(_) => {
+                    self.seen.push(*counter);
+
+                    Handled
+                }
+            }
+        }
+
+        #[superstate(superstate = outer)]
+        async fn counting(counter: &mut u32, event: &Event) -> Outcome<State> {
+            pending_once().await;
+
+            match event {
+                Event::Bump(_) => {
+                    *counter += 1;
+
+                    Super
+                }
+            }
+        }
+
+        #[state(superstate = counting, local_storage(counter: u32))]
+        fn on(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Bump(_) => Super,
+            }
+        }
+    }
+}
+
+#[test]
+fn borrowed_superstate_storage_in_awaitable_machine() {
+    let mut machine = counter::Counter::default().state_machine();
+
+    block_on(machine.handle(counter::Bump, &mut ()));
+    block_on(machine.handle(counter::Bump, &mut ()));
+
+    assert!(matches!(
+        machine.state(),
+        counter::State::On { counter: 2, .. }
+    ));
+    assert_eq!(machine.seen, [1, 2]);
+}
+
+// MARK: Termination
+
+mod finisher {
+    use sotu::prelude::*;
+
+    use crate::common::pending_once::pending_once;
+
+    pub struct Next;
+    pub struct Finish;
+
+    #[derive(Event)]
+    pub enum Event {
+        Next(Next),
+        Finish(Finish),
+    }
+
+    #[derive(Eq, PartialEq, Debug)]
+    pub enum Done {
+        Finished,
+    }
+
+    #[derive(Default)]
+    pub struct Finisher {
+        pub trace: Vec<&'static str>,
+    }
+
+    #[state_machine(initial = State::running(), exit = Done)]
+    impl Finisher {
+        #[state(entry_action = enter_running)]
+        fn running(event: &Event) -> Outcome<State, Done> {
+            match event {
+                Event::Next(_) => Transition(State::finishing()),
+                Event::Finish(_) => Handled,
+            }
+        }
+
+        #[state]
+        async fn finishing(event: &Event) -> Outcome<State, Done> {
+            pending_once().await;
+
+            match event {
+                Event::Next(_) => Handled,
+                Event::Finish(_) => Exit(Done::Finished),
+            }
+        }
+
+        #[action]
+        async fn enter_running(&mut self) {
+            pending_once().await;
+
+            self.trace.push("enter running");
+        }
+    }
+}
+
+#[test]
+fn awaitable_machine_terminates_and_restarts() {
+    let mut machine = finisher::Finisher::default().state_machine();
+
+    block_on(machine.handle(finisher::Next, &mut ()));
+
+    assert!(matches!(machine.state(), finisher::State::Finishing {}));
+    assert_eq!(
+        block_on(machine.handle(finisher::Finish, &mut ())),
+        Some(&finisher::Done::Finished)
+    );
+    assert!(machine.is_terminated());
+
+    block_on(machine.restart(&mut ()));
+
+    assert!(!machine.is_terminated());
+    assert_eq!(machine.exit(), None);
+    assert!(matches!(machine.state(), finisher::State::Running {}));
+    assert_eq!(machine.trace, ["enter running", "enter running"]);
+}
+
