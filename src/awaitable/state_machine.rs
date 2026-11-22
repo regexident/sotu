@@ -509,3 +509,34 @@ impl<M: IntoStateMachine> Deref for StateMachine<M> {
         &self.inner.shared_storage
     }
 }
+
+impl<M: IntoStateMachine> From<UninitializedStateMachine<M>> for StateMachine<M> {
+    /// Convert into a machine that still initializes itself on first use.
+    fn from(machine: UninitializedStateMachine<M>) -> Self {
+        Self {
+            inner: machine.inner,
+            initialized: false,
+        }
+    }
+}
+
+impl<M: IntoStateMachine> From<InitializedStateMachine<M>> for StateMachine<M> {
+    /// Convert into a machine that does not run the initial entry actions
+    /// again.
+    ///
+    /// Work that a dropped future of the initialized machine left interrupted
+    /// stays recorded and is completed by the next call.
+    fn from(machine: InitializedStateMachine<M>) -> Self {
+        Self {
+            inner: machine.inner,
+            initialized: true,
+        }
+    }
+}
+
+impl<M: IntoStateMachine + Default> Default for StateMachine<M> {
+    /// Return an uninitialized machine holding the default shared storage.
+    fn default() -> Self {
+        M::default().state_machine()
+    }
+}

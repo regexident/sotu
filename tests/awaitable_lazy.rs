@@ -7,7 +7,7 @@ use core::convert::Infallible;
 use common::async_tree::AsyncTree;
 use common::tree::{Input, Node, Record};
 use futures::executor::block_on;
-use sotu::awaitable::{IntoStateMachine, IntoStateMachineExt, State};
+use sotu::awaitable::{IntoStateMachine, IntoStateMachineExt, State, StateMachine};
 use sotu::prelude::Outcome;
 
 // MARK: Ticker Machine
@@ -74,6 +74,49 @@ fn init_is_idempotent() {
         let mut machine = AsyncTree::default().state_machine();
 
         machine.init(&mut ()).await;
+        machine.init(&mut ()).await;
+
+        assert_eq!(
+            machine.trace,
+            [Record::Entry(Node::A), Record::Entry(Node::A1)]
+        );
+    });
+}
+
+// MARK: Conversions
+
+#[test]
+fn conversions_keep_initialization_status() {
+    block_on(async {
+        let mut machine = StateMachine::from(AsyncTree::default().uninitialized_state_machine());
+
+        machine.handle(Input::Ignore, &mut ()).await;
+
+        assert_eq!(machine.trace.first(), Some(&Record::Entry(Node::A)));
+
+        let mut initialized = AsyncTree::default()
+            .uninitialized_state_machine()
+            .init(&mut ())
+            .await;
+
+        initialized.inner_mut().trace.clear();
+
+        let mut machine = StateMachine::from(initialized);
+
+        machine.handle(Input::Ignore, &mut ()).await;
+
+        assert_eq!(
+            machine.trace.first(),
+            Some(&Record::BeforeDispatch(Node::A1))
+        );
+    });
+}
+
+#[test]
+fn default_machine_is_uninitialized() {
+    block_on(async {
+        let mut machine = StateMachine::<AsyncTree>::default();
+
         machine.init(&mut ()).await;
 
         assert_eq!(
