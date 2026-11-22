@@ -3,8 +3,12 @@
 //! The machine behaves exactly like [`Tree`](super::tree::Tree): it has the
 //! same handlers and actions, appends the same [`Record`]s to
 //! [`AsyncTree::trace`] and updates the local `visits` counters the same way.
-//! Every handler, action and hook first awaits [`pending_once`], so each step
-//! suspends once before it takes effect.
+//! Every handler, action and hook first counts a start (see [`starts`]), then
+//! awaits [`pending_once`], so each step suspends once before it takes effect.
+//! A step whose future is dropped during that await is counted as started but
+//! leaves no [`Record`].
+
+use std::cell::Cell;
 
 use sotu::StateOrSuperstate;
 use sotu::awaitable::{IntoStateMachine, State, Superstate};
@@ -12,6 +16,32 @@ use sotu::prelude::Outcome;
 
 use super::pending_once::pending_once;
 use super::tree::{Finished, Input, Leaf, Node, Record, leaf_node};
+
+// MARK: Start Counter
+
+// The test harness runs each test on its own thread, so concurrent tests never
+// see each other's starts.
+std::thread_local! {
+    static STARTS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Return how many handlers, actions and hooks have started on the current
+/// thread since the last [`reset_starts`].
+///
+/// A step counts as started before its first await, so a step that runs again
+/// after its future was dropped counts twice.
+pub fn starts() -> u32 {
+    STARTS.get()
+}
+
+/// Reset the start count of the current thread to zero.
+pub fn reset_starts() {
+    STARTS.set(0);
+}
+
+fn count_start() {
+    STARTS.set(STARTS.get() + 1);
+}
 
 // MARK: Machine
 
@@ -82,6 +112,7 @@ impl IntoStateMachine for AsyncTree {
         _event: &Input,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         self.trace.push(Record::BeforeDispatch(node_of(node)));
@@ -93,6 +124,7 @@ impl IntoStateMachine for AsyncTree {
         _event: &Input,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         self.trace.push(Record::AfterDispatch(node_of(node)));
@@ -104,6 +136,7 @@ impl IntoStateMachine for AsyncTree {
         target: &AsyncTreeState,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         self.trace.push(Record::BeforeTransition(
@@ -118,6 +151,7 @@ impl IntoStateMachine for AsyncTree {
         target: &AsyncTreeState,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         self.trace.push(Record::AfterTransition(
@@ -136,6 +170,7 @@ impl State<AsyncTree> for AsyncTreeState {
         event: &Input,
         _context: &mut (),
     ) -> Outcome<AsyncTreeState, Finished> {
+        count_start();
         pending_once().await;
 
         shared_storage
@@ -157,6 +192,7 @@ impl State<AsyncTree> for AsyncTreeState {
         shared_storage: &mut AsyncTree,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         shared_storage
@@ -173,6 +209,7 @@ impl State<AsyncTree> for AsyncTreeState {
         shared_storage: &mut AsyncTree,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         shared_storage
@@ -204,6 +241,7 @@ impl Superstate<AsyncTree> for AsyncTreeSuperstate<'_> {
         event: &Input,
         _context: &mut (),
     ) -> Outcome<AsyncTreeState, Finished> {
+        count_start();
         pending_once().await;
 
         match self {
@@ -236,6 +274,7 @@ impl Superstate<AsyncTree> for AsyncTreeSuperstate<'_> {
         shared_storage: &mut AsyncTree,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         match self {
@@ -252,6 +291,7 @@ impl Superstate<AsyncTree> for AsyncTreeSuperstate<'_> {
         shared_storage: &mut AsyncTree,
         _context: &mut (),
     ) {
+        count_start();
         pending_once().await;
 
         match self {
