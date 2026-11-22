@@ -8,7 +8,7 @@ use syn::{
     parse_quote_spanned,
 };
 
-use crate::analyze::HooksModel;
+use crate::analyze::{HooksModel, Mode};
 use crate::lower::{
     ActionArmIr, ActionDispatchIr, ArmIr, CallIr, DispatchIr, FieldIr, Ir, MachineIr,
     MountActionIr, MountIr, NodeTypeIr, ParentArmIr, ParentDispatchIr, ParentFieldIr, ParentIr,
@@ -19,6 +19,7 @@ use crate::lower::{
 
 /// Generate the impl block, the node enums and the trait implementations of a machine.
 pub(crate) fn generate(ir: &Ir) -> TokenStream {
+    let mode = ir.mode;
     let item = &ir.item;
     let mounts = &ir.mounts;
 
@@ -40,7 +41,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         .as_ref()
         .map(|superstate| superstate_dispatch_impl(superstate, mounts));
 
-    let submachine = submachine_impls(&ir.machine);
+    let submachine = submachine_impls(&ir.machine, mode);
     let projection = projection_impl(&ir.machine, mounts);
 
     quote! {
@@ -402,10 +403,19 @@ fn transition_hook(machine: &MachineIr, method: &Ident, path: &Path) -> TokenStr
     }
 }
 
-fn submachine_impls(machine: &MachineIr) -> TokenStream {
+fn submachine_impls(machine: &MachineIr, mode: Mode) -> TokenStream {
     let shared_storage = &machine.shared_storage;
     let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
+
+    // Only a blocking parent can mount a machine, and it requires this marker.
+    let blocking = (mode == Mode::Blocking).then(|| {
+        quote! {
+            impl #impl_generics ::sotu::private::BlockingSubmachine for #shared_storage
+            #where_clause
+            {}
+        }
+    });
 
     // Without `exit = Type` the exit type is `Infallible`, so the machine can be
     // mounted without an exit handler.
@@ -422,9 +432,7 @@ fn submachine_impls(machine: &MachineIr) -> TokenStream {
             #items
         }
 
-        impl #impl_generics ::sotu::private::BlockingSubmachine for #shared_storage
-        #where_clause
-        {}
+        #blocking
 
         #exitless
     }

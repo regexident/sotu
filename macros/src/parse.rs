@@ -158,6 +158,9 @@ pub(crate) struct MachineArgs {
     pub(crate) state: StateTypeArgs,
     /// The options of the superstate enum.
     pub(crate) superstate: SuperstateTypeArgs,
+    /// Whether the bare flag `awaitable` makes the machine awaitable even
+    /// without `async` items.
+    pub(crate) awaitable: bool,
 }
 
 /// The arguments of `state(...)` in `#[state_machine]`.
@@ -330,6 +333,7 @@ impl Parse for MachineArgs {
             visibility: None,
             state: StateTypeArgs::default(),
             superstate: SuperstateTypeArgs::default(),
+            awaitable: false,
         };
 
         let mut entries: Vec<(Ident, Expr)> = Vec::new();
@@ -341,6 +345,23 @@ impl Parse for MachineArgs {
         // types and the visibility is a visibility, none of which parse as the
         // expression every other value is.
         while !input.is_empty() {
+            if is_flag_argument(input, "awaitable") {
+                match parse_flag_argument(input) {
+                    Ok(key) if arguments.awaitable => push_error(
+                        &mut errors,
+                        syn::Error::new_spanned(&key, format!("duplicate `{key}` item")),
+                    ),
+                    Ok(_) => arguments.awaitable = true,
+                    Err(error) => {
+                        push_error(&mut errors, error);
+
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
             if is_type_argument(input, "visibility") {
                 match parse_visibility_argument(input) {
                     Ok((key, visibility)) => {
@@ -421,6 +442,26 @@ impl Parse for MachineArgs {
             None => Ok(arguments),
         }
     }
+}
+
+/// Return whether the next argument in `input` is the bare flag `key`, which
+/// a comma or the end of the arguments follows.
+fn is_flag_argument(input: ParseStream<'_>, key: &str) -> bool {
+    let fork = input.fork();
+
+    fork.parse::<Ident>().is_ok_and(|ident| ident == key)
+        && (fork.is_empty() || fork.peek(Token![,]))
+}
+
+/// Parse one bare flag argument and the comma that separates it from the next.
+fn parse_flag_argument(input: ParseStream<'_>) -> syn::Result<Ident> {
+    let key: Ident = input.parse()?;
+
+    if !input.is_empty() {
+        input.parse::<Token![,]>()?;
+    }
+
+    Ok(key)
 }
 
 /// Return whether the next argument in `input` is written `key = Type`.
@@ -1129,6 +1170,23 @@ mod tests {
         assert!(custom.state.custom.is_some_and(|key| key == "custom"));
         assert!(custom.state.name.is_some_and(|name| name == "Mine"));
         assert!(custom.state.derives.is_empty());
+    }
+
+    #[test]
+    fn machine_arguments_read_awaitable_flag() {
+        let trailing: MachineArgs = syn::parse_str("initial = State::a(), awaitable").unwrap();
+        let leading: MachineArgs = syn::parse_str("awaitable, initial = State::a()").unwrap();
+        let absent: MachineArgs = syn::parse_str("initial = State::a()").unwrap();
+        let initial = leading.initial.unwrap();
+
+        assert!(trailing.awaitable);
+        assert!(leading.awaitable);
+        assert_eq!(quote!(#initial).to_string(), "State :: a ()");
+        assert!(!absent.awaitable);
+        assert_eq!(
+            argument_error("initial = State::a(), awaitable, awaitable"),
+            "duplicate `awaitable` item"
+        );
     }
 
     #[test]
