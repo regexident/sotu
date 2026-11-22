@@ -1,4 +1,5 @@
 use crate::StateOrSuperstate;
+use crate::private::{AsyncWithContext, AsyncWithoutContext};
 use crate::private::{WithContext, WithoutContext};
 
 use super::IntoStateMachine;
@@ -19,6 +20,12 @@ use super::IntoStateMachine;
 /// [`WithoutContext`] or [`WithContext`]. Such a function matches exactly one
 /// of the two, so the marker is always inferred. A plain hook runs to
 /// completion before the call returns, and the returned future is ready.
+///
+/// An `async` function is accepted as well, with the `Arity` marker
+/// [`AsyncWithoutContext`] or [`AsyncWithContext`], and the returned future is
+/// the hook's own. The plain and `async` markers never compete: a plain
+/// function returning `()` never implements [`AsyncFn`], because `()` is not a
+/// future, and an `async` function returns a future, never `()`.
 pub trait DispatchHook<'ctx, 'data: 'ctx, M: IntoStateMachine, Arity> {
     /// Call the hook for `node` and `event`, forwarding `context` if the hook
     /// takes it.
@@ -69,5 +76,42 @@ where
         self(shared_storage, node, event, context);
 
         core::future::ready(())
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> DispatchHook<'ctx, 'data, M, AsyncWithoutContext> for F
+where
+    M: IntoStateMachine,
+    F: AsyncFn(&mut M, StateOrSuperstate<'_, M::State, M::Superstate<'_>>, &M::Event),
+{
+    fn call_dispatch_hook(
+        &self,
+        shared_storage: &mut M,
+        node: StateOrSuperstate<'_, M::State, M::Superstate<'_>>,
+        event: &M::Event,
+        _context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, node, event)
+    }
+}
+
+impl<'ctx, 'data: 'ctx, M, F> DispatchHook<'ctx, 'data, M, AsyncWithContext> for F
+where
+    M: IntoStateMachine,
+    F: AsyncFn(
+        &mut M,
+        StateOrSuperstate<'_, M::State, M::Superstate<'_>>,
+        &M::Event,
+        &mut M::Context<'ctx, 'data>,
+    ),
+{
+    fn call_dispatch_hook(
+        &self,
+        shared_storage: &mut M,
+        node: StateOrSuperstate<'_, M::State, M::Superstate<'_>>,
+        event: &M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()> {
+        self(shared_storage, node, event, context)
     }
 }

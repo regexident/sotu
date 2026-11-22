@@ -1,7 +1,10 @@
 #![cfg(feature = "async")]
 
+mod common;
+
 use core::convert::Infallible;
 
+use common::pending_once::pending_once;
 use futures::executor::block_on;
 use sotu::StateOrSuperstate;
 use sotu::awaitable::{DispatchHook, IntoStateMachine, State};
@@ -56,6 +59,26 @@ fn count_with_context(
     *context += 1;
 }
 
+async fn count_async(
+    counter: &mut Counter,
+    _node: StateOrSuperstate<'_, CounterState, ()>,
+    _event: &(),
+) {
+    pending_once().await;
+    counter.calls += 1;
+}
+
+async fn count_async_with_context(
+    counter: &mut Counter,
+    _node: StateOrSuperstate<'_, CounterState, ()>,
+    _event: &(),
+    context: &mut u32,
+) {
+    pending_once().await;
+    counter.calls += 1;
+    *context += 1;
+}
+
 #[test]
 fn plain_dispatch_hook_without_context() {
     let mut counter = Counter { calls: 0 };
@@ -80,6 +103,40 @@ fn plain_dispatch_hook_with_context() {
 
     block_on(DispatchHook::call_dispatch_hook(
         &count_with_context,
+        &mut counter,
+        StateOrSuperstate::State(&CounterState::Only),
+        &(),
+        &mut context,
+    ));
+
+    assert_eq!(counter.calls, 1);
+    assert_eq!(context, 6);
+}
+
+#[test]
+fn async_dispatch_hook_without_context() {
+    let mut counter = Counter { calls: 0 };
+    let mut context = 5;
+
+    block_on(DispatchHook::call_dispatch_hook(
+        &count_async,
+        &mut counter,
+        StateOrSuperstate::State(&CounterState::Only),
+        &(),
+        &mut context,
+    ));
+
+    assert_eq!(counter.calls, 1);
+    assert_eq!(context, 5);
+}
+
+#[test]
+fn async_dispatch_hook_with_context() {
+    let mut counter = Counter { calls: 0 };
+    let mut context = 5;
+
+    block_on(DispatchHook::call_dispatch_hook(
+        &count_async_with_context,
         &mut counter,
         StateOrSuperstate::State(&CounterState::Only),
         &(),
