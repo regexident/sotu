@@ -11,6 +11,11 @@
 //! superstate from the previous one, so at most one borrow of each chain is
 //! live at a time.
 //!
+//! `owned_hierarchy_algorithms!` generates walks for a `superstate` method
+//! that consumes the superstate and returns its parent. Every step replaces
+//! the current superstate with its parent, so the walks are loops and keep at
+//! most one superstate of each chain alive at a time.
+//!
 //! Depths count levels from the top: a top-level node has depth 1 and the
 //! implicit top above all nodes has depth 0.
 //!
@@ -270,3 +275,41 @@ macro_rules! hierarchy_algorithms {
 }
 
 pub(crate) use hierarchy_algorithms;
+
+// MARK: Owned Walks
+
+/// Generate the hierarchy algorithms in the invoking module for a mode whose
+/// `Superstate::superstate` consumes the superstate.
+///
+/// The invoking module must have `IntoStateMachine`, `State` and `Superstate`
+/// in scope, naming the traits of one mode.
+#[cfg(feature = "async")]
+macro_rules! owned_hierarchy_algorithms {
+    () => {
+        /// Return the depth of `state`, counting itself.
+        pub(crate) fn state_depth<M: IntoStateMachine>(state: &mut M::State) -> usize {
+            match state.superstate() {
+                Some(superstate) => 1 + superstate_depth::<M>(superstate),
+                None => 1,
+            }
+        }
+
+        /// Return the depth of `superstate`, counting itself.
+        pub(crate) fn superstate_depth<M: IntoStateMachine>(
+            superstate: M::Superstate<'_>,
+        ) -> usize {
+            let mut depth = 1;
+            let mut current = superstate.superstate();
+
+            while let Some(parent) = current {
+                depth += 1;
+                current = parent.superstate();
+            }
+
+            depth
+        }
+    };
+}
+
+#[cfg(feature = "async")]
+pub(crate) use owned_hierarchy_algorithms;
