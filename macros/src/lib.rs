@@ -85,10 +85,21 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///   called just before the first exit action and just after the last entry
 ///   action of a transition. Such a function takes `&mut self`, the source state
 ///   and the target state.
+/// - `awaitable` is a bare flag that makes the machine awaitable.
 ///
 /// A hook function may take the context input as a trailing parameter, and the
 /// generated code passes it the context only if it does. A hook whose argument
 /// is absent keeps the no-op default of `sotu::blocking::IntoStateMachine`.
+///
+/// The machine is awaitable when any `#[state]`, `#[superstate]` or
+/// `#[submachine]` handler, `#[action]` or `#[exit_handler]` is an `async fn`,
+/// when a hook names an `async fn` of the impl block as `name` or
+/// `Self::name`, or when `awaitable` is given. An awaitable machine implements
+/// the traits of `sotu::awaitable` in place of those of `sotu::blocking`, awaits
+/// its `async` handlers, actions and hooks, and calls its plain ones directly.
+/// Hooks defined elsewhere are not inspected, so a machine whose only `async`
+/// items are such hooks must declare `awaitable`. An awaitable machine can not
+/// mount submachines.
 ///
 /// A handler takes an optional receiver, which is the shared storage, an
 /// optional event input and an optional context input. Inputs are classified
