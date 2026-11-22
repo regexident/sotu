@@ -48,6 +48,41 @@ impl State<Ticker> for TickerState {
     }
 }
 
+// MARK: Probe Machine
+
+#[derive(Default, Eq, PartialEq, Debug)]
+struct Probe {
+    value: u8,
+}
+
+#[derive(Eq, PartialEq, Debug)]
+enum ProbeState {
+    Only,
+}
+
+impl IntoStateMachine for Probe {
+    type Event = ();
+    type Context<'ctx, 'data: 'ctx> = ();
+    type State = ProbeState;
+    type Superstate<'sub> = ();
+    type Exit = Infallible;
+
+    fn initial() -> ProbeState {
+        ProbeState::Only
+    }
+}
+
+impl State<Probe> for ProbeState {
+    async fn call_handler<'ctx, 'data: 'ctx>(
+        &mut self,
+        _shared_storage: &mut Probe,
+        _event: &(),
+        _context: &mut (),
+    ) -> Outcome<ProbeState, Infallible> {
+        Outcome::Handled
+    }
+}
+
 // MARK: Lazy Initialization
 
 #[test]
@@ -138,4 +173,14 @@ fn step_dispatches_unit_event() {
 
         assert_eq!(machine.ticks, 2);
     });
+}
+
+// MARK: Debug
+
+#[test]
+fn debug_lists_fields() {
+    assert_eq!(
+        format!("{:?}", Probe { value: 3 }.state_machine()),
+        "StateMachine { shared_storage: Probe { value: 3 }, state: Only, exit: None, initialized: false }"
+    );
 }
