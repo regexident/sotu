@@ -12,14 +12,16 @@ use syn::{
 };
 
 use crate::analyze::{
-    ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Model, MountModel, StateModel,
-    SuperstateModel,
+    ActionModel, DefaultValue, FieldModel, HooksModel, InputKind, Mode, Model, MountModel,
+    StateModel, SuperstateModel,
 };
 
 // MARK: Intermediate Representation
 
 /// Everything [`generate`](crate::codegen::generate) emits.
 pub(crate) struct Ir {
+    /// Whether the machine implements the blocking or the awaitable traits.
+    pub(crate) mode: Mode,
     /// The impl block with the attributes of `sotu` removed.
     pub(crate) item: ItemImpl,
     /// The generated state enum, or `None` if the user defines it.
@@ -363,6 +365,7 @@ pub(crate) fn lower(model: &Model) -> Ir {
     let superstate_type = lower_superstate_type(model);
 
     Ir {
+        mode: model.mode,
         item: model.item.clone(),
         state_enum: (!model.state_type.custom).then(|| StateEnumIr {
             ty: state.clone(),

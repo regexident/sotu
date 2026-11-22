@@ -77,6 +77,18 @@ pub(crate) struct Model {
     pub(crate) state_type: TypeOptions,
     /// The options of the superstate enum.
     pub(crate) superstate_type: TypeOptions,
+    /// Whether the generated code implements the blocking or the awaitable traits.
+    pub(crate) mode: Mode,
+}
+
+/// The kind of machine that `#[state_machine]` generates.
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub(crate) enum Mode {
+    /// The machine implements the traits of `sotu::blocking`.
+    Blocking,
+    /// The machine implements the traits of `sotu::awaitable`, awaiting its
+    /// `async` handlers, actions and hooks.
+    Awaitable,
 }
 
 /// The name and derives of a node enum, and whether the user defines it.
@@ -124,6 +136,8 @@ pub(crate) struct StateModel {
     pub(crate) exit_action: Option<Ident>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
+    /// Whether the handler is an `async fn`.
+    pub(crate) is_async: bool,
 }
 
 /// A superstate handler of the machine.
@@ -149,6 +163,8 @@ pub(crate) struct SuperstateModel {
     pub(crate) initial: Option<Expr>,
     /// The doc comments of the handler.
     pub(crate) docs: Vec<Attribute>,
+    /// Whether the handler is an `async fn`.
+    pub(crate) is_async: bool,
 }
 
 /// A submachine mounted as a composite node of the machine.
@@ -188,6 +204,8 @@ pub(crate) struct MountModel {
     pub(crate) inputs: Vec<InputKind>,
     /// The doc comments of the mount handler.
     pub(crate) docs: Vec<Attribute>,
+    /// Whether the mount handler is an `async fn`.
+    pub(crate) is_async: bool,
 }
 
 /// A local storage field of a state.
@@ -206,6 +224,8 @@ pub(crate) struct ActionModel {
     pub(crate) name: Ident,
     /// The classified inputs of the action, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
+    /// Whether the action is an `async fn`.
+    pub(crate) is_async: bool,
 }
 
 /// An exit handler of the machine, which answers a mounted machine's exit
@@ -215,6 +235,8 @@ pub(crate) struct ExitHandlerModel {
     pub(crate) name: Ident,
     /// The classified inputs of the exit handler, in declaration order.
     pub(crate) inputs: Vec<InputKind>,
+    /// Whether the exit handler is an `async fn`.
+    pub(crate) is_async: bool,
 }
 
 /// What an input of a handler or action receives.
@@ -292,6 +314,8 @@ struct Nodes {
     superstates: Vec<SuperstateModel>,
     /// The mount handlers.
     mounts: Vec<MountModel>,
+    /// The `#[submachine]` attributes of the mount handlers, in the same order.
+    mount_attributes: Vec<Attribute>,
     /// The entry and exit actions.
     actions: Vec<ActionModel>,
     /// The exit handlers.
@@ -345,6 +369,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             states,
             superstates,
             mounts,
+            mount_attributes,
             actions,
             exit_handlers,
             event_type,
@@ -352,6 +377,25 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         },
         mut errors,
     ) = collect_nodes(&mut item, &names);
+
+    let hooks = HooksModel {
+        before_dispatch: arguments.before_dispatch,
+        after_dispatch: arguments.after_dispatch,
+        before_transition: arguments.before_transition,
+        after_transition: arguments.after_transition,
+    };
+
+    let nodes = AsyncItems {
+        states: &states,
+        superstates: &superstates,
+        mounts: &mounts,
+        actions: &actions,
+        exit_handlers: &exit_handlers,
+    };
+
+    let mode = machine_mode(arguments.awaitable, &nodes, &hooks, &item);
+
+    check_awaitable_mounts(mode, &mount_attributes, &mut errors);
 
     check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
     check_links(&states, &superstates, &mounts, &actions, &mut errors);
@@ -390,12 +434,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
         exit_type: arguments
             .exit
             .unwrap_or_else(|| parse_quote!(::core::convert::Infallible)),
-        hooks: HooksModel {
-            before_dispatch: arguments.before_dispatch,
-            after_dispatch: arguments.after_dispatch,
-            before_transition: arguments.before_transition,
-            after_transition: arguments.after_transition,
-        },
+        hooks,
         states,
         superstates,
         mounts,
@@ -420,6 +459,7 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             custom: false,
             derives: arguments.superstate.derives,
         },
+        mode,
     })
 }
 
@@ -432,6 +472,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut states = Vec::new();
     let mut superstates = Vec::new();
     let mut mounts = Vec::new();
+    let mut mount_attributes = Vec::new();
     let mut actions = Vec::new();
     let mut exit_handlers = Vec::new();
     let mut event_type = None;
@@ -499,6 +540,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     &mut event_type,
                     &mut errors,
                 ));
+                mount_attributes.push(source);
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 let attachment = attachments
@@ -563,6 +605,7 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
         states,
         superstates,
         mounts,
+        mount_attributes,
         actions,
         exit_handlers,
         event_type,
@@ -1170,6 +1213,7 @@ fn analyze_superstate(
         exit_action: arguments.exit_action,
         initial: arguments.initial,
         docs,
+        is_async: function.sig.asyncness.is_some(),
     }
 }
 
@@ -1232,6 +1276,7 @@ fn analyze_mount(
         exit_handler: arguments.exit_handler,
         inputs,
         docs,
+        is_async: function.sig.asyncness.is_some(),
     }
 }
 
@@ -1304,6 +1349,7 @@ fn analyze_state(
         entry_action: arguments.entry_action,
         exit_action: arguments.exit_action,
         docs,
+        is_async: function.sig.asyncness.is_some(),
     }
 }
 
@@ -1344,6 +1390,7 @@ fn analyze_action(function: &ImplItemFn, names: &InputNames, attached: bool) -> 
     ActionModel {
         name: function.sig.ident.clone(),
         inputs,
+        is_async: function.sig.asyncness.is_some(),
     }
 }
 
@@ -1386,6 +1433,7 @@ fn analyze_exit_handler(function: &ImplItemFn, names: &InputNames) -> ExitHandle
     ExitHandlerModel {
         name: function.sig.ident.clone(),
         inputs,
+        is_async: function.sig.asyncness.is_some(),
     }
 }
 
@@ -1737,6 +1785,102 @@ fn context_input<'a>(function: &'a ImplItemFn, names: &InputNames) -> Option<&'a
         FnArg::Typed(typed) if is_named(typed, &names.context) => Some(typed),
         FnArg::Receiver(_) | FnArg::Typed(_) => None,
     })
+}
+
+// MARK: Mode
+
+/// The classified items whose `async` declarations make a machine awaitable.
+struct AsyncItems<'model> {
+    states: &'model [StateModel],
+    superstates: &'model [SuperstateModel],
+    mounts: &'model [MountModel],
+    actions: &'model [ActionModel],
+    exit_handlers: &'model [ExitHandlerModel],
+}
+
+/// Return the mode of a machine with the items `nodes` and the hooks `hooks`
+/// of `item`, which is awaitable when `awaitable` is given or any item or hook
+/// is `async`.
+fn machine_mode(
+    awaitable: bool,
+    nodes: &AsyncItems<'_>,
+    hooks: &HooksModel,
+    item: &ItemImpl,
+) -> Mode {
+    let has_async_item = nodes.states.iter().any(|state| state.is_async)
+        || nodes
+            .superstates
+            .iter()
+            .any(|superstate| superstate.is_async)
+        || nodes.mounts.iter().any(|mount| mount.is_async)
+        || nodes.actions.iter().any(|action| action.is_async)
+        || nodes
+            .exit_handlers
+            .iter()
+            .any(|exit_handler| exit_handler.is_async);
+
+    let hook_paths = [
+        &hooks.before_dispatch,
+        &hooks.after_dispatch,
+        &hooks.before_transition,
+        &hooks.after_transition,
+    ];
+
+    let has_async_hook = hook_paths
+        .into_iter()
+        .flatten()
+        .any(|path| is_async_function(item, path));
+
+    if awaitable || has_async_item || has_async_hook {
+        Mode::Awaitable
+    } else {
+        Mode::Blocking
+    }
+}
+
+/// Return whether `path` names an `async fn` of `item`.
+///
+/// Only `name` and `Self::name` resolve to a function of `item`. Any other
+/// path names a function defined elsewhere, which is not inspected, so a
+/// machine whose only `async` hooks are such functions must declare
+/// `awaitable`.
+fn is_async_function(item: &ItemImpl, path: &Path) -> bool {
+    if path.leading_colon.is_some() {
+        return false;
+    }
+
+    let segments: Vec<&Ident> = path.segments.iter().map(|segment| &segment.ident).collect();
+
+    let name = match segments.as_slice() {
+        [name] => *name,
+        [first, name] if *first == "Self" => *name,
+        _ => return false,
+    };
+
+    item.items.iter().any(|impl_item| {
+        matches!(
+            impl_item,
+            ImplItem::Fn(function)
+                if function.sig.ident == *name && function.sig.asyncness.is_some()
+        )
+    })
+}
+
+/// Report the `#[submachine]` attribute of every mount of an awaitable machine.
+fn check_awaitable_mounts(mode: Mode, attributes: &[Attribute], errors: &mut Option<syn::Error>) {
+    if mode == Mode::Blocking {
+        return;
+    }
+
+    for attribute in attributes {
+        push_error(
+            errors,
+            syn::Error::new_spanned(
+                attribute,
+                "submachines in awaitable machines require the awaitable boundary",
+            ),
+        );
+    }
 }
 
 // MARK: Names
@@ -3282,6 +3426,90 @@ mod tests {
             messages(Some(error)),
             ["entry action not found", "superstate not found"]
         );
+    }
+
+    #[test]
+    fn async_handler_makes_machine_awaitable() {
+        let model = model(parse_quote! {
+            impl Blinky {
+                #[state(entry_action = light)]
+                async fn on(event: &Event) -> Outcome<State> {
+                    Handled
+                }
+
+                #[action]
+                fn light(&mut self) {}
+            }
+        });
+
+        assert_eq!(model.mode, Mode::Awaitable);
+        assert!(model.states[0].is_async);
+        assert!(!model.actions[0].is_async);
+    }
+
+    #[test]
+    fn async_hook_in_impl_makes_machine_awaitable() {
+        let item: ItemImpl = parse_quote! {
+            impl Blinky {
+                fn before(&mut self, node: StateOrSuperstate<'_, State, ()>, event: &Event) {}
+
+                async fn after(&mut self, node: StateOrSuperstate<'_, State, ()>, event: &Event) {}
+
+                #[state]
+                fn on(event: &Event) -> Outcome<State> {
+                    Handled
+                }
+            }
+        };
+
+        let qualified: MachineArgs = syn::parse_str(
+            "initial = State::on(), before_dispatch = Self::before, after_dispatch = Self::after",
+        )
+        .unwrap();
+
+        let bare: MachineArgs =
+            syn::parse_str("initial = State::on(), after_dispatch = after").unwrap();
+
+        for arguments in [qualified, bare] {
+            let model = match analyze(arguments, item.clone()) {
+                Ok(model) => model,
+                Err(error) => panic!("analysis failed: {error}"),
+            };
+
+            assert_eq!(model.mode, Mode::Awaitable);
+        }
+    }
+
+    #[test]
+    fn plain_machine_stays_blocking() {
+        let arguments: MachineArgs = syn::parse_str(
+            "initial = State::on(), before_dispatch = Self::before, \
+             after_transition = hooks::elsewhere",
+        )
+        .unwrap();
+
+        let item: ItemImpl = parse_quote! {
+            impl Blinky {
+                fn before(&mut self, node: StateOrSuperstate<'_, State, ()>, event: &Event) {}
+
+                async fn elsewhere(&mut self) {}
+
+                #[state(entry_action = light)]
+                fn on(event: &Event) -> Outcome<State> {
+                    Handled
+                }
+
+                #[action]
+                fn light(&mut self) {}
+            }
+        };
+
+        let model = match analyze(arguments, item) {
+            Ok(model) => model,
+            Err(error) => panic!("analysis failed: {error}"),
+        };
+
+        assert_eq!(model.mode, Mode::Blocking);
     }
 
     #[test]
