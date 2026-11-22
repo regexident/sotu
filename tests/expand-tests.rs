@@ -85,3 +85,12 @@ mod action {
             .expect_fail();
     }
 }
+
+mod awaitable {
+    #[test]
+    pub fn pass() {
+        tryexpand::expand(["tests/expand-tests/awaitable/pass/**/*.rs"])
+            .args(["--features", "async"])
+            .and_check();
+    }
+}
