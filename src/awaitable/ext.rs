@@ -1,3 +1,8 @@
+use core::ops::ControlFlow;
+
+use crate::private::{Dispatched, NodeOutcome};
+use crate::{Outcome, StateOrSuperstate};
+
 use super::{IntoStateMachine, State, Superstate};
 
 crate::hierarchy::owned_hierarchy_algorithms!();
@@ -64,6 +69,36 @@ pub trait StateExt<M: IntoStateMachine>: State<M> {
         context: &mut M::Context<'ctx, 'data>,
         levels: usize,
     ) -> impl Future<Output = ()>;
+
+    /// Dispatch `event` along the active path, starting at this state.
+    ///
+    /// The event goes to this state and then up the chain of superstates for
+    /// as long as nodes return [`Outcome::Super`]. The root's
+    /// [`before_dispatch`](IntoStateMachine::before_dispatch) and
+    /// [`after_dispatch`](IntoStateMachine::after_dispatch) hooks surround every
+    /// dispatched node, in that order, and `after_dispatch` receives the event
+    /// the node handed back. Each hook and handler is awaited before the next
+    /// one starts.
+    ///
+    /// Returns the first outcome other than [`Outcome::Super`] together with
+    /// the depth of the node that decided it, so [`Outcome::Super`] is never
+    /// returned. An [`Outcome::ExternalTransition`] reports the depth of the
+    /// node that handles it, which may lie above the node that returned it. A
+    /// `Super` past the top-level node drops the event, which counts as handled
+    /// and returns `(Outcome::Handled, 0)`.
+    ///
+    /// A node that reports the event as not addressed to it is skipped without
+    /// hooks or handler, and the event continues upward. A node at depth `d`
+    /// that defers `mount_offset` levels up skips every node deeper than
+    /// `d - mount_offset` without hooks, and dispatch continues normally at
+    /// that depth. An offset of `d` or more skips every remaining node and
+    /// returns `(Outcome::Handled, 0)`.
+    fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> impl Future<Output = (Outcome<M::State, M::Exit>, usize)>;
 }
 
 impl<M, S> StateExt<M> for S
@@ -132,6 +167,115 @@ where
     ) {
         for level in 0..levels {
             self.exit_level(shared_storage, context, level).await;
+        }
+    }
+
+    async fn handle<'ctx, 'data: 'ctx>(
+        &mut self,
+        shared_storage: &mut M,
+        event: M::Event,
+        context: &mut M::Context<'ctx, 'data>,
+    ) -> (Outcome<M::State, M::Exit>, usize) {
+        let mut depth = state_depth::<M>(self);
+        let (is_addressed, event) = self.__is_addressed(event);
+
+        let (mut event, mut skip_to) = if is_addressed {
+            shared_storage
+                .before_dispatch(StateOrSuperstate::State(&*self), &event, context)
+                .await;
+
+            let Dispatched { outcome, event } =
+                self.__dispatch(shared_storage, event, context).await;
+
+            shared_storage
+                .after_dispatch(StateOrSuperstate::State(&*self), &event, context)
+                .await;
+
+            match resolve_node_outcome::<M>(outcome, depth) {
+                ControlFlow::Break(decision) => return decision,
+                ControlFlow::Continue(skip_to) => (event, skip_to),
+            }
+        } else {
+            (event, None)
+        };
+
+        // Each superstate is consumed to obtain its parent once its own
+        // dispatch is complete, so the walk is a loop over one owned
+        // superstate and the future never has to recurse.
+        let mut current = self.superstate();
+
+        while let Some(mut superstate) = current {
+            depth -= 1;
+
+            if skip_to.is_none_or(|resume_depth| depth <= resume_depth) {
+                let (is_addressed, event_to_dispatch) = superstate.__is_addressed(event);
+
+                (event, skip_to) = if is_addressed {
+                    shared_storage
+                        .before_dispatch(
+                            StateOrSuperstate::Superstate(&superstate),
+                            &event_to_dispatch,
+                            context,
+                        )
+                        .await;
+
+                    let Dispatched { outcome, event } = superstate
+                        .__dispatch(shared_storage, event_to_dispatch, context)
+                        .await;
+
+                    shared_storage
+                        .after_dispatch(StateOrSuperstate::Superstate(&superstate), &event, context)
+                        .await;
+
+                    match resolve_node_outcome::<M>(outcome, depth) {
+                        ControlFlow::Break(decision) => return decision,
+                        ControlFlow::Continue(skip_to) => (event, skip_to),
+                    }
+                } else {
+                    (event_to_dispatch, None)
+                };
+            }
+
+            current = superstate.superstate();
+        }
+
+        (Outcome::Handled, 0)
+    }
+}
+
+/// The deciding outcome of a dispatch and the depth of the node that decided it.
+type Decision<M> = (
+    Outcome<<M as IntoStateMachine>::State, <M as IntoStateMachine>::Exit>,
+    usize,
+);
+
+/// Decide how dispatch proceeds after the node at `depth` returned `outcome`.
+///
+/// Breaks with the result of the dispatch, or continues with the depth at which
+/// dispatch resumes above this node, where `None` names the parent.
+fn resolve_node_outcome<M: IntoStateMachine>(
+    outcome: NodeOutcome<M::State, M::Exit>,
+    depth: usize,
+) -> ControlFlow<Decision<M>, Option<usize>> {
+    match outcome {
+        NodeOutcome::Handled => ControlFlow::Break((Outcome::Handled, depth)),
+        NodeOutcome::Super => ControlFlow::Continue(None),
+        NodeOutcome::Transition(target) => ControlFlow::Break((Outcome::Transition(target), depth)),
+        // An offset beyond the top names no handling node, which depth `0`
+        // expresses to the transition path computations.
+        NodeOutcome::ExternalTransition {
+            target,
+            handler_offset,
+        } => ControlFlow::Break((
+            Outcome::ExternalTransition(target),
+            depth.saturating_sub(handler_offset),
+        )),
+        NodeOutcome::Exit(exit) => ControlFlow::Break((Outcome::Exit(exit), depth)),
+        NodeOutcome::DeferToMount { mount_offset } if mount_offset >= depth => {
+            ControlFlow::Break((Outcome::Handled, 0))
+        }
+        NodeOutcome::DeferToMount { mount_offset } => {
+            ControlFlow::Continue(Some(depth - mount_offset))
         }
     }
 }

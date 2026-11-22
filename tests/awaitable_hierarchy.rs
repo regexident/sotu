@@ -5,14 +5,18 @@ mod common;
 use common::async_tree::AsyncTree;
 use common::async_tree::AsyncTreeState;
 use common::async_tree::async_state_for;
+use common::tree::Finished;
+use common::tree::Input;
 use common::tree::Leaf;
 use common::tree::Node;
 use common::tree::Record;
+use common::tree::Tree;
 use common::tree::depth_of;
 use common::tree::leaf_node;
 use common::tree::state_for;
 use futures::executor::block_on;
 use proptest::prop_assert_eq;
+use sotu::Outcome;
 use sotu::awaitable::StateExt as _;
 use sotu::blocking::StateExt as _;
 use test_strategy::proptest;
@@ -101,4 +105,65 @@ fn exit_awaits_exit_actions_innermost_first() {
         ]
     );
     assert_eq!(state, AsyncTreeState::B1 { visits: 20 });
+}
+
+// MARK: Dispatch
+
+fn run_async_tree(
+    leaf: Leaf,
+    input: Input,
+) -> ((Outcome<AsyncTreeState, Finished>, usize), Vec<Record>) {
+    let mut tree = AsyncTree::default();
+    let result = block_on(async_state_for(leaf).handle(&mut tree, input, &mut ()));
+
+    (result, tree.trace)
+}
+
+fn blocking_trace(leaf: Leaf, input: Input) -> Vec<Record> {
+    let mut tree = Tree::default();
+    state_for(leaf).handle(&mut tree, input, &mut ());
+
+    tree.trace
+}
+
+fn node_records(node: Node) -> [Record; 3] {
+    [
+        Record::BeforeDispatch(node),
+        Record::Handler(node),
+        Record::AfterDispatch(node),
+    ]
+}
+
+#[test]
+fn event_bubbles_to_top_with_awaited_hooks() {
+    let (result, trace) = run_async_tree(Leaf::B1, Input::Ignore);
+
+    assert_eq!(result, (Outcome::Handled, 0));
+    assert_eq!(
+        trace,
+        [
+            node_records(Node::B1),
+            node_records(Node::B),
+            node_records(Node::A),
+        ]
+        .concat(),
+    );
+    assert_eq!(trace, blocking_trace(Leaf::B1, Input::Ignore));
+}
+
+#[test]
+fn first_non_super_outcome_wins() {
+    let (result, trace) = run_async_tree(Leaf::B1, Input::GoFromA(Leaf::C));
+
+    assert_eq!(result, (Outcome::Transition(AsyncTreeState::C), 1));
+    assert_eq!(
+        trace,
+        [
+            node_records(Node::B1),
+            node_records(Node::B),
+            node_records(Node::A),
+        ]
+        .concat(),
+    );
+    assert_eq!(trace, blocking_trace(Leaf::B1, Input::GoFromA(Leaf::C)));
 }
