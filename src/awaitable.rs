@@ -14,9 +14,11 @@
 //!
 //! [`IntoStateMachineExt::uninitialized_state_machine`] wraps the shared
 //! storage in an [`UninitializedStateMachine`], and awaiting its `init` method
-//! returns the [`InitializedStateMachine`] that handles events. The prelude
-//! brings the extension trait into scope but not the wrapper types, whose
-//! names equal those of the blocking wrappers.
+//! returns the [`InitializedStateMachine`] that handles events.
+//! [`IntoStateMachineExt::state_machine`] wraps it in a [`StateMachine`]
+//! instead, which initializes itself on first use. The prelude brings the
+//! extension trait into scope but not the wrapper types, whose names equal
+//! those of the blocking wrappers.
 //!
 //! A blocking machine never implements these traits, so a type is a machine
 //! of exactly one mode and method calls through the prelude stay unambiguous.
@@ -51,5 +53,6 @@ pub use into_state_machine::IntoStateMachine;
 pub use state::State;
 pub use state_machine::InitializedStateMachine;
 pub use state_machine::IntoStateMachineExt;
+pub use state_machine::StateMachine;
 pub use state_machine::UninitializedStateMachine;
 pub use superstate::Superstate;

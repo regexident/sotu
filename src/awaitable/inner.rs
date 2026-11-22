@@ -199,7 +199,7 @@ impl<M: IntoStateMachine> Inner<M> {
     /// it as completed, or advances the record without awaiting. The record
     /// therefore never claims a call that has not completed, and a call that is
     /// interrupted runs again from its start on the next drive.
-    async fn drive_pending(&mut self, context: &mut M::Context<'_, '_>) {
+    pub(crate) async fn drive_pending(&mut self, context: &mut M::Context<'_, '_>) {
         while let Some(pending) = &mut self.pending {
             match pending {
                 Pending::Init { entered, levels } => {
