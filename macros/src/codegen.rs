@@ -548,12 +548,20 @@ fn awaitable_boundary_impl(ir: &Ir) -> Option<TokenStream> {
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let methods = awaitable_boundary_methods(ir);
 
+    // The impl reads the static depth that the superstate enum provides.
+    let depth = ir
+        .superstate
+        .as_ref()
+        .map(|superstate| superstate_depth_impl(superstate, &ir.mounts));
+
     Some(quote! {
         impl #impl_generics ::sotu::private::AwaitableSubmachine for #shared_storage
         #where_clause
         {
             #methods
         }
+
+        #depth
     })
 }
 
@@ -588,6 +596,57 @@ fn with_boundary_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
     }
 
     generics
+}
+
+/// Generate the private `__depth` function of the superstate enum, which
+/// returns the depth of a variant without walking the chain above it.
+///
+/// A borrowed superstate can not be walked in awaitable mode, so the depth is
+/// a property of the variant: the length of its declared chain of enclosing
+/// nodes. A superstate of a mounted child is as deep as the mount node plus
+/// the child's own depth of it.
+fn superstate_depth_impl(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream {
+    let name = &superstate.ty.name;
+    let generics = with_boundary_bounds(&superstate.ty.generics, mounts);
+    let (impl_generics, type_generics, where_clause) = generics.split_for_impl();
+
+    let variant_arms = superstate.variants.iter().map(|variant| {
+        let variant_name = &variant.name;
+        let depth = variant.depth;
+
+        quote! {
+            #name::#variant_name { .. } => #depth,
+        }
+    });
+
+    let mount_arms = mounts.iter().map(|mount| {
+        let MountIr {
+            variant,
+            machine,
+            depth,
+            ..
+        } = mount;
+
+        quote! {
+            #name::#variant(::sotu::SubmachineNode::Mount) => #depth,
+            #name::#variant(::sotu::SubmachineNode::Inner(superstate)) => {
+                #depth + <#machine as ::sotu::private::AwaitableSubmachine>::superstate_depth(
+                    superstate,
+                )
+            }
+        }
+    });
+
+    quote! {
+        impl #impl_generics #name #type_generics #where_clause {
+            fn __depth(&self) -> usize {
+                match self {
+                    #(#variant_arms)*
+                    #(#mount_arms)*
+                }
+            }
+        }
+    }
 }
 
 /// Return the qualified path to the `State` trait of `mode` for the state
@@ -634,6 +693,8 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
     let superstate_sub = quote!(<Self as #submachine>::Superstate<'sub>);
     let event = quote!(<Self as #submachine>::Event);
 
+    let superstate_depth = boundary_superstate_depth(ir);
+
     quote! {
         fn state_superstate<'sub>(
             state: &'sub mut #state,
@@ -675,6 +736,35 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
         {
             #superstate_trait::__is_addressed(superstate, event)
         }
+
+        #superstate_depth
+    }
+}
+
+/// Generate `superstate_depth`, which reads the superstate enum.
+///
+/// A machine without one has the placeholder superstate `()`, which no state
+/// returns, so its depth is `0`.
+fn boundary_superstate_depth(ir: &Ir) -> TokenStream {
+    let superstate = quote!(<Self as ::sotu::private::Submachine>::Superstate<'sub>);
+
+    match &ir.superstate {
+        Some(_) => quote! {
+            fn superstate_depth<'sub>(superstate: &#superstate) -> usize
+            where
+                Self: 'sub,
+            {
+                superstate.__depth()
+            }
+        },
+        None => quote! {
+            fn superstate_depth<'sub>(_superstate: &#superstate) -> usize
+            where
+                Self: 'sub,
+            {
+                0
+            }
+        },
     }
 }
 

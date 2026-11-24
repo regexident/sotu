@@ -189,6 +189,17 @@ pub trait AwaitableSubmachine: Submachine {
     ) -> (bool, Self::Event)
     where
         Self: 'sub;
+
+    /// Return the depth of `superstate`, counting itself.
+    ///
+    /// A borrowed superstate can not be walked to count its levels, so the
+    /// depth is a property of the variant of `superstate`: the length of its
+    /// declared chain of enclosing nodes. For a superstate of a mounted child
+    /// it is the depth of the mount node plus the depth of the child's
+    /// superstate inside the child.
+    fn superstate_depth<'sub>(superstate: &Self::Superstate<'sub>) -> usize
+    where
+        Self: 'sub;
 }
 
 /// A [`NodeOutcome`] together with the event it was produced for.
