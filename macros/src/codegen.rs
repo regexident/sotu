@@ -695,6 +695,8 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
 
     let superstate_depth = boundary_superstate_depth(ir);
 
+    let superstate_parent = boundary_superstate_parent(ir, &superstate_trait);
+
     quote! {
         fn state_superstate<'sub>(
             state: &'sub mut #state,
@@ -738,6 +740,8 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
         }
 
         #superstate_depth
+
+        #superstate_parent
     }
 }
 
@@ -765,6 +769,70 @@ fn boundary_superstate_depth(ir: &Ir) -> TokenStream {
                 0
             }
         },
+    }
+}
+
+/// Generate `superstate_parent`.
+///
+/// An awaitable machine delegates to its consuming `Superstate::superstate`.
+/// A blocking machine builds the parent from the fields of the consumed
+/// superstate, or has none without a superstate enum.
+fn boundary_superstate_parent(ir: &Ir, superstate_trait: &TokenStream) -> TokenStream {
+    let superstate = quote!(<Self as ::sotu::private::Submachine>::Superstate<'sub>);
+
+    let (parameter, body) = match (&ir.superstate, ir.mode) {
+        (Some(superstate_ir), Mode::Blocking) => (
+            quote!(superstate),
+            consuming_parent_body(superstate_ir, &ir.mounts),
+        ),
+        (None, Mode::Blocking) => (quote!(_superstate), quote!(::core::option::Option::None)),
+        (_, Mode::Awaitable) => (
+            quote!(superstate),
+            quote!(#superstate_trait::superstate(superstate)),
+        ),
+    };
+
+    quote! {
+        fn superstate_parent<'sub>(
+            #parameter: #superstate,
+        ) -> ::core::option::Option<#superstate>
+        where
+            Self: 'sub,
+        {
+            #body
+        }
+    }
+}
+
+/// Generate the body that consumes a blocking superstate and returns its
+/// parent, moving the borrowed fields into the parent.
+///
+/// A superstate of a mounted child asks the child through the boundary for
+/// the parent of the child's superstate and lifts it into the mount's variant.
+fn consuming_parent_body(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream {
+    let name = &superstate.ty.name;
+    let parents = &superstate.consuming_parents;
+
+    let arms = parents
+        .arms
+        .iter()
+        .map(|arm| parent_arm(name, &parents.superstate.name, arm));
+
+    let lifted = mounts.iter().map(|mount| {
+        let child = &mount.machine;
+
+        lifted_superstate_parent_arms(
+            name,
+            mount,
+            &quote!(<#child as ::sotu::private::AwaitableSubmachine>::superstate_parent),
+        )
+    });
+
+    quote! {
+        match superstate {
+            #(#arms)*
+            #(#lifted)*
+        }
     }
 }
 
@@ -1014,6 +1082,7 @@ fn superstate_dispatch_impl(
         entry_actions,
         exit_actions,
         parents,
+        consuming_parents: _,
     } = superstate;
 
     let name = &ty.name;
@@ -1063,9 +1132,11 @@ fn superstate_dispatch_impl(
 
     let parents = match mode {
         Mode::Blocking => {
-            let lifted = mounts
-                .iter()
-                .map(|mount| lifted_superstate_parent_arms(name, mount));
+            let lifted = mounts.iter().map(|mount| {
+                let child_superstate = child_superstate_trait(&mount.machine);
+
+                lifted_superstate_parent_arms(name, mount, &quote!(#child_superstate::superstate))
+            });
 
             parent_method(name, parents, lifted.collect())
         }
@@ -1197,18 +1268,21 @@ fn instance_call(
 /// Generate the arms of `Superstate::superstate` for `mount`.
 ///
 /// The mount node returns its own parent. A superstate of the child returns
-/// its own superstate lifted into the mount's variant, or the mount node if it
-/// is at the child's top level.
-fn lifted_superstate_parent_arms(enum_name: &Ident, mount: &MountIr) -> TokenStream {
+/// the parent that `child_parent` computes from it, lifted into the mount's
+/// variant, or the mount node if it is at the child's top level.
+fn lifted_superstate_parent_arms(
+    enum_name: &Ident,
+    mount: &MountIr,
+    child_parent: &TokenStream,
+) -> TokenStream {
     let variant = &mount.variant;
     let parent = parent_value(enum_name, mount.parent.as_ref());
-    let child_superstate = child_superstate_trait(&mount.machine);
 
     quote! {
         #enum_name::#variant(::sotu::SubmachineNode::Mount) => #parent,
         #enum_name::#variant(::sotu::SubmachineNode::Inner(superstate)) => {
             ::core::option::Option::Some(#enum_name::#variant(
-                match #child_superstate::superstate(superstate) {
+                match #child_parent(superstate) {
                     ::core::option::Option::Some(parent) => {
                         ::sotu::SubmachineNode::Inner(parent)
                     }

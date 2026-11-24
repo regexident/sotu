@@ -200,6 +200,22 @@ pub trait AwaitableSubmachine: Submachine {
     fn superstate_depth<'sub>(superstate: &Self::Superstate<'sub>) -> usize
     where
         Self: 'sub;
+
+    /// Consume `superstate` and return the superstate enclosing it, if there is
+    /// one.
+    ///
+    /// A borrowed superstate can not be walked upwards by borrowing it once
+    /// per level, since a future that awaits while holding such a chain would
+    /// have to be recursive. Consuming each superstate keeps exactly one of
+    /// the chain alive.
+    ///
+    /// The parent has the lifetime of `superstate`, so storage that
+    /// `superstate` borrows from the active leaf state moves into the parent.
+    fn superstate_parent<'sub>(
+        superstate: Self::Superstate<'sub>,
+    ) -> Option<Self::Superstate<'sub>>
+    where
+        Self: 'sub;
 }
 
 /// A [`NodeOutcome`] together with the event it was produced for.
