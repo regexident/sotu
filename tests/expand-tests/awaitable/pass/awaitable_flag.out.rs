@@ -82,6 +82,61 @@ impl ::sotu::private::Submachine for Button {
         State::idle()
     }
 }
+impl ::sotu::private::AwaitableSubmachine for Button {
+    fn state_superstate<'sub>(
+        state: &'sub mut <Self as ::sotu::private::Submachine>::State,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::superstate(state)
+    }
+    fn state_same(
+        first: &<Self as ::sotu::private::Submachine>::State,
+        second: &<Self as ::sotu::private::Submachine>::State,
+    ) -> bool {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::same_state(first, second)
+    }
+    fn superstate_same<'first, 'second>(
+        first: &<Self as ::sotu::private::Submachine>::Superstate<'first>,
+        second: &<Self as ::sotu::private::Submachine>::Superstate<'second>,
+    ) -> bool
+    where
+        Self: 'first + 'second,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Button>>::same_state(first, second)
+    }
+    fn state_depth(state: &mut <Self as ::sotu::private::Submachine>::State) -> usize {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::StateExt<
+            Button,
+        >>::depth(state)
+    }
+    fn state_is_addressed(
+        state: &<Self as ::sotu::private::Submachine>::State,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event) {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::__is_addressed(state, event)
+    }
+    fn superstate_is_addressed<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event)
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Button>>::__is_addressed(superstate, event)
+    }
+}
 fn main() {
     let _machine = Button::default().state_machine();
 }
