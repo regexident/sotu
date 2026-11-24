@@ -181,6 +181,101 @@ mod door {
                 Superstate::Frame {} => ::core::option::Option::None,
             }
         }
+        fn dispatch_state<'ctx, 'data: 'ctx>(
+            state: &mut <Self as ::sotu::private::Submachine>::State,
+            shared_storage: &mut Self,
+            event: <Self as ::sotu::private::Submachine>::Event,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<
+            Output = ::sotu::private::Dispatched<
+                <Self as ::sotu::private::Submachine>::State,
+                <Self as ::sotu::private::Submachine>::Exit,
+                <Self as ::sotu::private::Submachine>::Event,
+            >,
+        > {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                    Door,
+                >>::__dispatch(state, shared_storage, event, context),
+            )
+        }
+        fn dispatch_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+            shared_storage: &mut Self,
+            event: <Self as ::sotu::private::Submachine>::Event,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<
+            Output = ::sotu::private::Dispatched<
+                <Self as ::sotu::private::Submachine>::State,
+                <Self as ::sotu::private::Submachine>::Exit,
+                <Self as ::sotu::private::Submachine>::Event,
+            >,
+        >
+        where
+            Self: 'sub,
+        {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::Superstate<
+                    Door,
+                >>::__dispatch(superstate, shared_storage, event, context),
+            )
+        }
+        fn enter_state<'ctx, 'data: 'ctx>(
+            state: &mut <Self as ::sotu::private::Submachine>::State,
+            shared_storage: &mut Self,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<Output = ()> {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                    Door,
+                >>::call_entry_action(state, shared_storage, context),
+            )
+        }
+        fn exit_state<'ctx, 'data: 'ctx>(
+            state: &mut <Self as ::sotu::private::Submachine>::State,
+            shared_storage: &mut Self,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<Output = ()> {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                    Door,
+                >>::call_exit_action(state, shared_storage, context),
+            )
+        }
+        fn enter_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+            shared_storage: &mut Self,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<Output = ()>
+        where
+            Self: 'sub,
+        {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::Superstate<
+                    Door,
+                >>::call_entry_action(superstate, shared_storage, context),
+            )
+        }
+        fn exit_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+            shared_storage: &mut Self,
+            context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+        ) -> impl ::core::future::Future<Output = ()>
+        where
+            Self: 'sub,
+        {
+            ::core::future::ready(
+                <<Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                    '_,
+                > as ::sotu::blocking::Superstate<
+                    Door,
+                >>::call_exit_action(superstate, shared_storage, context),
+            )
+        }
     }
     impl Superstate {
         fn __depth(&self) -> usize {
@@ -928,6 +1023,101 @@ where
                 )
             }
         }
+    }
+    fn dispatch_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        event: <Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<
+        Output = ::sotu::private::Dispatched<
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Exit,
+            <Self as ::sotu::private::Submachine>::Event,
+        >,
+    > {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Hall,
+            >>::__dispatch(state, shared_storage, event, context),
+        )
+    }
+    fn dispatch_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        event: <Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<
+        Output = ::sotu::private::Dispatched<
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Exit,
+            <Self as ::sotu::private::Submachine>::Event,
+        >,
+    >
+    where
+        Self: 'sub,
+    {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
+                '_,
+            > as ::sotu::blocking::Superstate<
+                Hall,
+            >>::__dispatch(superstate, shared_storage, event, context),
+        )
+    }
+    fn enter_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Hall,
+            >>::call_entry_action(state, shared_storage, context),
+        )
+    }
+    fn exit_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Hall,
+            >>::call_exit_action(state, shared_storage, context),
+        )
+    }
+    fn enter_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
+                '_,
+            > as ::sotu::blocking::Superstate<
+                Hall,
+            >>::call_entry_action(superstate, shared_storage, context),
+        )
+    }
+    fn exit_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        ::core::future::ready(
+            <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
+                '_,
+            > as ::sotu::blocking::Superstate<
+                Hall,
+            >>::call_exit_action(superstate, shared_storage, context),
+        )
     }
 }
 impl<'sub> Superstate<'sub>
