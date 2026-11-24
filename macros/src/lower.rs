@@ -81,6 +81,9 @@ pub(crate) struct MountIr {
     pub(crate) projection: Ident,
     /// The node enclosing the mount node, or `None` for a top-level mount.
     pub(crate) parent: Option<ParentIr>,
+    /// The depth of the mount node, counting itself, where a top-level mount
+    /// has depth `1`.
+    pub(crate) depth: usize,
 }
 
 /// A call of an action or exit handler attached to a mount.
@@ -248,6 +251,9 @@ pub(crate) struct SuperstateVariantIr {
     pub(crate) initial: Option<Expr>,
     /// The borrowed fields in declaration order.
     pub(crate) fields: Vec<FieldIr>,
+    /// The depth of the superstate, counting itself, where a top-level
+    /// superstate has depth `1`.
+    pub(crate) depth: usize,
 }
 
 /// A match arm that calls one handler.
@@ -451,6 +457,7 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         exit_handler: lower_exit_handler(model, mount.exit_handler.as_ref()),
         projection: format_ident!("__project_into_{}", mount.constructor),
         parent: parent.map(|parent| lower_parent(parent, |_| None)),
+        depth: node_depth(model, mount.superstate.as_ref()),
     }
 }
 
@@ -802,7 +809,7 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
         variants: model
             .superstates
             .iter()
-            .map(lower_superstate_variant)
+            .map(|superstate| lower_superstate_variant(model, superstate))
             .collect(),
         shared_storage: model.shared_storage.clone(),
         generics: model.generics.clone(),
@@ -836,8 +843,9 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
     }
 }
 
-fn lower_superstate_variant(superstate: &SuperstateModel) -> SuperstateVariantIr {
+fn lower_superstate_variant(model: &Model, superstate: &SuperstateModel) -> SuperstateVariantIr {
     SuperstateVariantIr {
+        depth: node_depth(model, superstate.superstate.as_ref()),
         docs: superstate.docs.clone(),
         name: superstate.variant.clone(),
         constructor: superstate.constructor.clone(),
@@ -883,6 +891,21 @@ fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDisp
     }
 }
 
+/// Return the depth of a node whose enclosing node `link` names, counting the
+/// node itself, so that a node without a link has depth `1`.
+///
+/// Analysis rejects cycles of links, so the walk ends within as many steps as
+/// the machine has nodes. The bound keeps the walk finite regardless.
+fn node_depth(model: &Model, link: Option<&Ident>) -> usize {
+    let nodes = model.superstates.len() + model.mounts.len();
+
+    let enclosing = std::iter::successors(find_parent(model, link), |parent| {
+        find_parent(model, parent.link())
+    });
+
+    1 + enclosing.take(nodes).count()
+}
+
 /// Return the superstate or mount that `link` names, if it exists.
 fn find_parent<'model>(model: &'model Model, link: Option<&Ident>) -> Option<ParentNode<'model>> {
     let name = link?;
@@ -902,12 +925,20 @@ fn find_parent<'model>(model: &'model Model, link: Option<&Ident>) -> Option<Par
     })
 }
 
-impl ParentNode<'_> {
+impl<'model> ParentNode<'model> {
     /// Return the fields the parent borrows from its child.
     fn fields(&self) -> &[FieldModel] {
         match self {
             Self::Superstate(superstate) => &superstate.fields,
             Self::Mount(_) => &[],
+        }
+    }
+
+    /// Return the name of the node that encloses this one, if there is one.
+    fn link(self) -> Option<&'model Ident> {
+        match self {
+            Self::Superstate(superstate) => superstate.superstate.as_ref(),
+            Self::Mount(mount) => mount.superstate.as_ref(),
         }
     }
 }
