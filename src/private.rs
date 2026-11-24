@@ -216,6 +216,62 @@ pub trait AwaitableSubmachine: Submachine {
     ) -> Option<Self::Superstate<'sub>>
     where
         Self: 'sub;
+
+    /// Dispatch `event` to `state` alone.
+    ///
+    /// Resolves to the outcome of the state together with the event it was
+    /// produced for.
+    fn dispatch_state<'ctx, 'data: 'ctx>(
+        state: &mut Self::State,
+        shared_storage: &mut Self,
+        event: Self::Event,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = Dispatched<Self::State, Self::Exit, Self::Event>>;
+
+    /// Dispatch `event` to `superstate` alone.
+    ///
+    /// Resolves to the outcome of the superstate together with the event it
+    /// was produced for.
+    fn dispatch_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut Self::Superstate<'sub>,
+        shared_storage: &mut Self,
+        event: Self::Event,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = Dispatched<Self::State, Self::Exit, Self::Event>>
+    where
+        Self: 'sub;
+
+    /// Run the entry action of `state`.
+    fn enter_state<'ctx, 'data: 'ctx>(
+        state: &mut Self::State,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+
+    /// Run the exit action of `state`.
+    fn exit_state<'ctx, 'data: 'ctx>(
+        state: &mut Self::State,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+
+    /// Run the entry action of `superstate`.
+    fn enter_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut Self::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>
+    where
+        Self: 'sub;
+
+    /// Run the exit action of `superstate`.
+    fn exit_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut Self::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>
+    where
+        Self: 'sub;
 }
 
 /// A [`NodeOutcome`] together with the event it was produced for.
