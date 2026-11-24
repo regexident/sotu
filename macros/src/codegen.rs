@@ -47,6 +47,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         .map(|superstate| superstate_dispatch_impl(superstate, mounts, mode));
 
     let submachine = submachine_impls(&ir.machine, mode);
+    let boundary = awaitable_boundary_impl(ir);
     let projection = projection_impl(&ir.machine, mounts);
 
     quote! {
@@ -63,6 +64,8 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
         #superstate_dispatch
 
         #submachine
+
+        #boundary
 
         #projection
     }
@@ -528,6 +531,153 @@ fn machine_items(machine: &MachineIr) -> TokenStream {
     }
 }
 
+// MARK: Awaitable Boundary
+
+/// Generate the `AwaitableSubmachine` impl of the machine.
+///
+/// An awaitable machine always implements it. A blocking machine implements
+/// it only when the macros' `async` feature is enabled, which is the case
+/// exactly when `sotu` provides the awaitable boundary.
+fn awaitable_boundary_impl(ir: &Ir) -> Option<TokenStream> {
+    if ir.mode == Mode::Blocking && !cfg!(feature = "async") {
+        return None;
+    }
+
+    let shared_storage = &ir.machine.shared_storage;
+    let generics = boundary_generics(ir);
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+    let methods = awaitable_boundary_methods(ir);
+
+    Some(quote! {
+        impl #impl_generics ::sotu::private::AwaitableSubmachine for #shared_storage
+        #where_clause
+        {
+            #methods
+        }
+    })
+}
+
+/// Return the generics of the `AwaitableSubmachine` impl.
+///
+/// The impl calls the machine's own trait impls, so it needs the bounds of
+/// those.
+fn boundary_generics(ir: &Ir) -> Generics {
+    with_boundary_bounds(
+        &with_mount_bounds(&ir.machine.generics, &ir.mounts),
+        &ir.mounts,
+    )
+}
+
+/// Return `generics` with the bound that a parent needs to call each mounted
+/// machine through the awaitable boundary.
+///
+/// Each bound is spanned at the value of the `machine` key, like the bounds of
+/// [`with_mount_bounds`].
+fn with_boundary_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
+    let mut generics = generics.clone();
+
+    for mount in mounts {
+        let machine = &mount.machine;
+
+        generics
+            .make_where_clause()
+            .predicates
+            .push(parse_quote_spanned! {machine.span()=>
+                #machine: ::sotu::private::AwaitableSubmachine
+            });
+    }
+
+    generics
+}
+
+/// Return the qualified path to the `State` trait of `mode` for the state
+/// type of `machine`, through which every call into a state goes.
+fn state_trait(machine: &Type, mode: Mode) -> TokenStream {
+    let module = mode_module(mode);
+
+    quote! {
+        <<#machine as #module::IntoStateMachine>::State as #module::State<#machine>>
+    }
+}
+
+/// Return the qualified path to the `Superstate` trait of `mode` for the
+/// superstate type of `machine`, through which every call into a superstate
+/// goes.
+fn superstate_trait(machine: &Type, mode: Mode) -> TokenStream {
+    let module = mode_module(mode);
+
+    quote! {
+        <<#machine as #module::IntoStateMachine>::Superstate<'_>
+            as #module::Superstate<#machine>>
+    }
+}
+
+/// Generate the methods of the `AwaitableSubmachine` impl of the machine.
+///
+/// An awaitable machine delegates every method to its own traits. A blocking
+/// machine calls its blocking traits and wraps the result of each call that
+/// the boundary awaits in a future that is ready on its first poll, so a
+/// blocking call runs to completion when the future is created.
+fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
+    let mode = ir.mode;
+    let machine = &ir.machine.shared_storage;
+    let module = mode_module(mode);
+    let state_trait = state_trait(machine, mode);
+    let superstate_trait = superstate_trait(machine, mode);
+
+    let state_extension = quote! {
+        <<#machine as #module::IntoStateMachine>::State as #module::StateExt<#machine>>
+    };
+
+    let submachine = quote!(::sotu::private::Submachine);
+    let state = quote!(<Self as #submachine>::State);
+    let superstate_sub = quote!(<Self as #submachine>::Superstate<'sub>);
+    let event = quote!(<Self as #submachine>::Event);
+
+    quote! {
+        fn state_superstate<'sub>(
+            state: &'sub mut #state,
+        ) -> ::core::option::Option<#superstate_sub>
+        where
+            Self: 'sub,
+        {
+            #state_trait::superstate(state)
+        }
+
+        fn state_same(first: &#state, second: &#state) -> bool {
+            #state_trait::same_state(first, second)
+        }
+
+        fn superstate_same<'first, 'second>(
+            first: &<Self as #submachine>::Superstate<'first>,
+            second: &<Self as #submachine>::Superstate<'second>,
+        ) -> bool
+        where
+            Self: 'first + 'second,
+        {
+            #superstate_trait::same_state(first, second)
+        }
+
+        fn state_depth(state: &mut #state) -> usize {
+            #state_extension::depth(state)
+        }
+
+        fn state_is_addressed(state: &#state, event: #event) -> (bool, #event) {
+            #state_trait::__is_addressed(state, event)
+        }
+
+        fn superstate_is_addressed<'sub>(
+            superstate: &#superstate_sub,
+            event: #event,
+        ) -> (bool, #event)
+        where
+            Self: 'sub,
+        {
+            #superstate_trait::__is_addressed(superstate, event)
+        }
+    }
+}
+
 // MARK: State Dispatch
 
 fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> TokenStream {
@@ -711,20 +861,14 @@ fn state_same_state_method(
 /// Return the qualified path to the blocking `State` trait of the child
 /// `machine`'s state type, through which every call into a child state goes.
 fn child_state_trait(machine: &Type) -> TokenStream {
-    quote! {
-        <<#machine as ::sotu::blocking::IntoStateMachine>::State
-            as ::sotu::blocking::State<#machine>>
-    }
+    state_trait(machine, Mode::Blocking)
 }
 
 /// Return the qualified path to the blocking `Superstate` trait of the child
 /// `machine`'s superstate type, through which every call into a child
 /// superstate goes.
 fn child_superstate_trait(machine: &Type) -> TokenStream {
-    quote! {
-        <<#machine as ::sotu::blocking::IntoStateMachine>::Superstate<'_>
-            as ::sotu::blocking::Superstate<#machine>>
-    }
+    superstate_trait(machine, Mode::Blocking)
 }
 
 /// Return `generics` with the bounds that every mounted machine must satisfy.

@@ -141,6 +141,56 @@ pub trait BlockingSubmachine: Submachine + crate::blocking::IntoStateMachine {}
 )]
 pub trait ExitlessSubmachine: Submachine<Exit = core::convert::Infallible> {}
 
+/// The awaitable view of a generated machine, through which an awaitable
+/// parent calls its mounted children.
+///
+/// Every machine that `#[state_machine]` generates implements this trait: an
+/// awaitable machine natively, and a blocking machine through futures that are
+/// ready on their first poll when the macros' `async` feature is enabled. An
+/// awaitable parent therefore mounts a child of either mode without naming
+/// the child's mode.
+///
+/// The trait is not part of the public API and is exempt from semver. Only the
+/// code that `#[state_machine]` generates implements it, and it may change in
+/// any release.
+///
+/// Depths count levels from the top: a top-level node has depth `1`.
+#[cfg(feature = "async")]
+pub trait AwaitableSubmachine: Submachine {
+    /// Return the superstate enclosing `state`, if there is one.
+    ///
+    /// The superstate may borrow the local storage of `state`.
+    fn state_superstate<'sub>(state: &'sub mut Self::State) -> Option<Self::Superstate<'sub>>
+    where
+        Self: 'sub;
+
+    /// Return whether `first` and `second` are the same leaf state.
+    fn state_same(first: &Self::State, second: &Self::State) -> bool;
+
+    /// Return whether `first` and `second` are the same superstate.
+    fn superstate_same<'first, 'second>(
+        first: &Self::Superstate<'first>,
+        second: &Self::Superstate<'second>,
+    ) -> bool
+    where
+        Self: 'first + 'second;
+
+    /// Return the depth of `state`, counting itself.
+    fn state_depth(state: &mut Self::State) -> usize;
+
+    /// Return whether `state` is addressed by `event`, together with `event`.
+    fn state_is_addressed(state: &Self::State, event: Self::Event) -> (bool, Self::Event);
+
+    /// Return whether `superstate` is addressed by `event`, together with
+    /// `event`.
+    fn superstate_is_addressed<'sub>(
+        superstate: &Self::Superstate<'sub>,
+        event: Self::Event,
+    ) -> (bool, Self::Event)
+    where
+        Self: 'sub;
+}
+
 /// A [`NodeOutcome`] together with the event it was produced for.
 ///
 /// Dispatch hooks take the event by value so that mount boundaries can move it
