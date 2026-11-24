@@ -9,6 +9,9 @@ description = "Procedural macros for the sotu crate"
 [lib]
 proc-macro = true
 
+[features]
+async = []
+
 [dependencies]
 proc-macro2 = "1"
 quote = "1"
