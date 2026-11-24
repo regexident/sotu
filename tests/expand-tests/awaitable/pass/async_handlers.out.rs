@@ -207,6 +207,16 @@ impl ::sotu::private::AwaitableSubmachine for Blinker {
     {
         superstate.__depth()
     }
+    fn superstate_parent<'sub>(
+        superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Blinker>>::superstate(superstate)
+    }
 }
 impl<'sub> Superstate<'sub> {
     fn __depth(&self) -> usize {

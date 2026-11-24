@@ -144,6 +144,16 @@ impl ::sotu::private::AwaitableSubmachine for Button {
     {
         0
     }
+    fn superstate_parent<'sub>(
+        superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Button>>::superstate(superstate)
+    }
 }
 fn main() {
     let _machine = Button::default().state_machine();
