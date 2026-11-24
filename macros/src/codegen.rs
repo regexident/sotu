@@ -697,6 +697,42 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
 
     let superstate_parent = boundary_superstate_parent(ir, &superstate_trait);
 
+    let ready = |call: TokenStream| match mode {
+        Mode::Blocking => quote!(::core::future::ready(#call)),
+        Mode::Awaitable => call,
+    };
+
+    let exit = quote!(<Self as #submachine>::Exit);
+    let context = quote!(<Self as #submachine>::Context<'ctx, 'data>);
+    let dispatched = quote!(::sotu::private::Dispatched<#state, #exit, #event>);
+    let future = |output: TokenStream| quote!(impl ::core::future::Future<Output = #output>);
+    let dispatched_future = future(dispatched);
+    let unit_future = future(quote!(()));
+
+    let dispatch_state = ready(quote! {
+        #state_trait::__dispatch(state, shared_storage, event, context)
+    });
+
+    let dispatch_superstate = ready(quote! {
+        #superstate_trait::__dispatch(superstate, shared_storage, event, context)
+    });
+
+    let enter_state = ready(quote! {
+        #state_trait::call_entry_action(state, shared_storage, context)
+    });
+
+    let exit_state = ready(quote! {
+        #state_trait::call_exit_action(state, shared_storage, context)
+    });
+
+    let enter_superstate = ready(quote! {
+        #superstate_trait::call_entry_action(superstate, shared_storage, context)
+    });
+
+    let exit_superstate = ready(quote! {
+        #superstate_trait::call_exit_action(superstate, shared_storage, context)
+    });
+
     quote! {
         fn state_superstate<'sub>(
             state: &'sub mut #state,
@@ -742,6 +778,65 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
         #superstate_depth
 
         #superstate_parent
+
+        fn dispatch_state<'ctx, 'data: 'ctx>(
+            state: &mut #state,
+            shared_storage: &mut Self,
+            event: #event,
+            context: &mut #context,
+        ) -> #dispatched_future {
+            #dispatch_state
+        }
+
+        fn dispatch_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut #superstate_sub,
+            shared_storage: &mut Self,
+            event: #event,
+            context: &mut #context,
+        ) -> #dispatched_future
+        where
+            Self: 'sub,
+        {
+            #dispatch_superstate
+        }
+
+        fn enter_state<'ctx, 'data: 'ctx>(
+            state: &mut #state,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future {
+            #enter_state
+        }
+
+        fn exit_state<'ctx, 'data: 'ctx>(
+            state: &mut #state,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future {
+            #exit_state
+        }
+
+        fn enter_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut #superstate_sub,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future
+        where
+            Self: 'sub,
+        {
+            #enter_superstate
+        }
+
+        fn exit_superstate<'ctx, 'data: 'ctx, 'sub>(
+            superstate: &mut #superstate_sub,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future
+        where
+            Self: 'sub,
+        {
+            #exit_superstate
+        }
     }
 }
 
