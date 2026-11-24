@@ -237,6 +237,10 @@ pub(crate) struct SuperstateIr {
     pub(crate) exit_actions: Option<ActionDispatchIr>,
     /// The body of `superstate`.
     pub(crate) parents: ParentDispatchIr,
+    /// The body of a function that consumes a superstate and returns its
+    /// parent, which takes the fields that the parent borrows over from the
+    /// consumed superstate instead of reborrowing them.
+    pub(crate) consuming_parents: ParentDispatchIr,
 }
 
 /// A variant of the superstate enum.
@@ -838,7 +842,10 @@ fn lower_superstate(model: &Model, ty: NodeTypeIr, state: NodeTypeIr) -> Superst
             superstate.entry_action.as_ref()
         }),
         exit_actions: lower_superstate_actions(model, |superstate| superstate.exit_action.as_ref()),
-        parents: lower_superstate_parents(model, ty.clone()),
+        parents: lower_superstate_parents(model, ty.clone(), |field| {
+            (model.mode == Mode::Blocking).then(|| reborrow(field))
+        }),
+        consuming_parents: lower_superstate_parents(model, ty.clone(), |_| None),
         ty,
     }
 }
@@ -871,7 +878,17 @@ fn lower_state_parents(model: &Model, superstate: NodeTypeIr) -> ParentDispatchI
     }
 }
 
-fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDispatchIr {
+/// Lower the arms that build the parent of each superstate, building each
+/// field of the parent with `value`.
+///
+/// The blocking `superstate` borrows its receiver, so the parent reborrows the
+/// child's fields. The awaitable one consumes it, so the parent takes the
+/// child's fields over, which `value` expresses by returning `None`.
+fn lower_superstate_parents(
+    model: &Model,
+    superstate: NodeTypeIr,
+    value: impl Fn(&FieldModel) -> Option<Expr>,
+) -> ParentDispatchIr {
     ParentDispatchIr {
         superstate,
         arms: model
@@ -880,12 +897,7 @@ fn lower_superstate_parents(model: &Model, superstate: NodeTypeIr) -> ParentDisp
             .map(|child| {
                 let parent = find_parent(model, child.superstate.as_ref());
 
-                // The blocking `superstate` borrows its receiver, so the
-                // parent reborrows the child's fields. The awaitable one
-                // consumes it, so the parent takes the child's fields over.
-                lower_parent_arm(&child.variant, &child.fields, parent, |field| {
-                    (model.mode == Mode::Blocking).then(|| reborrow(field))
-                })
+                lower_parent_arm(&child.variant, &child.fields, parent, &value)
             })
             .collect(),
     }
