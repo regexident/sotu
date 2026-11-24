@@ -145,6 +145,61 @@ impl ::sotu::private::Submachine for Blinker {
     }
 }
 impl ::sotu::private::ExitlessSubmachine for Blinker {}
+impl ::sotu::private::AwaitableSubmachine for Blinker {
+    fn state_superstate<'sub>(
+        state: &'sub mut <Self as ::sotu::private::Submachine>::State,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Blinker,
+        >>::superstate(state)
+    }
+    fn state_same(
+        first: &<Self as ::sotu::private::Submachine>::State,
+        second: &<Self as ::sotu::private::Submachine>::State,
+    ) -> bool {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Blinker,
+        >>::same_state(first, second)
+    }
+    fn superstate_same<'first, 'second>(
+        first: &<Self as ::sotu::private::Submachine>::Superstate<'first>,
+        second: &<Self as ::sotu::private::Submachine>::Superstate<'second>,
+    ) -> bool
+    where
+        Self: 'first + 'second,
+    {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Blinker>>::same_state(first, second)
+    }
+    fn state_depth(state: &mut <Self as ::sotu::private::Submachine>::State) -> usize {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::StateExt<
+            Blinker,
+        >>::depth(state)
+    }
+    fn state_is_addressed(
+        state: &<Self as ::sotu::private::Submachine>::State,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event) {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Blinker,
+        >>::__is_addressed(state, event)
+    }
+    fn superstate_is_addressed<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event)
+    where
+        Self: 'sub,
+    {
+        <<Blinker as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Blinker>>::__is_addressed(superstate, event)
+    }
+}
 fn main() {
     let _machine = Blinker::default().state_machine();
 }

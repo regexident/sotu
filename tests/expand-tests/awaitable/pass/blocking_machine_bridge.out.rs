@@ -103,6 +103,65 @@ mod door {
     }
     impl ::sotu::private::BlockingSubmachine for Door {}
     impl ::sotu::private::ExitlessSubmachine for Door {}
+    impl ::sotu::private::AwaitableSubmachine for Door {
+        fn state_superstate<'sub>(
+            state: &'sub mut <Self as ::sotu::private::Submachine>::State,
+        ) -> ::core::option::Option<
+            <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        >
+        where
+            Self: 'sub,
+        {
+            <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Door,
+            >>::superstate(state)
+        }
+        fn state_same(
+            first: &<Self as ::sotu::private::Submachine>::State,
+            second: &<Self as ::sotu::private::Submachine>::State,
+        ) -> bool {
+            <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Door,
+            >>::same_state(first, second)
+        }
+        fn superstate_same<'first, 'second>(
+            first: &<Self as ::sotu::private::Submachine>::Superstate<'first>,
+            second: &<Self as ::sotu::private::Submachine>::Superstate<'second>,
+        ) -> bool
+        where
+            Self: 'first + 'second,
+        {
+            <<Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                '_,
+            > as ::sotu::blocking::Superstate<Door>>::same_state(first, second)
+        }
+        fn state_depth(
+            state: &mut <Self as ::sotu::private::Submachine>::State,
+        ) -> usize {
+            <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+                Door,
+            >>::depth(state)
+        }
+        fn state_is_addressed(
+            state: &<Self as ::sotu::private::Submachine>::State,
+            event: <Self as ::sotu::private::Submachine>::Event,
+        ) -> (bool, <Self as ::sotu::private::Submachine>::Event) {
+            <<Door as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+                Door,
+            >>::__is_addressed(state, event)
+        }
+        fn superstate_is_addressed<'sub>(
+            superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+            event: <Self as ::sotu::private::Submachine>::Event,
+        ) -> (bool, <Self as ::sotu::private::Submachine>::Event)
+        where
+            Self: 'sub,
+        {
+            <<Door as ::sotu::blocking::IntoStateMachine>::Superstate<
+                '_,
+            > as ::sotu::blocking::Superstate<Door>>::__is_addressed(superstate, event)
+        }
+    }
 }
 pub struct Hall {
     pub door: Option<door::Door>,
@@ -746,6 +805,66 @@ impl ::sotu::private::Submachine for Hall {
 }
 impl ::sotu::private::BlockingSubmachine for Hall {}
 impl ::sotu::private::ExitlessSubmachine for Hall {}
+impl ::sotu::private::AwaitableSubmachine for Hall
+where
+    door::Door: ::sotu::private::BlockingSubmachine,
+    door::Door: ::sotu::private::ExitlessSubmachine,
+    door::Door: ::sotu::private::AwaitableSubmachine,
+{
+    fn state_superstate<'sub>(
+        state: &'sub mut <Self as ::sotu::private::Submachine>::State,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+            Hall,
+        >>::superstate(state)
+    }
+    fn state_same(
+        first: &<Self as ::sotu::private::Submachine>::State,
+        second: &<Self as ::sotu::private::Submachine>::State,
+    ) -> bool {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+            Hall,
+        >>::same_state(first, second)
+    }
+    fn superstate_same<'first, 'second>(
+        first: &<Self as ::sotu::private::Submachine>::Superstate<'first>,
+        second: &<Self as ::sotu::private::Submachine>::Superstate<'second>,
+    ) -> bool
+    where
+        Self: 'first + 'second,
+    {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::blocking::Superstate<Hall>>::same_state(first, second)
+    }
+    fn state_depth(state: &mut <Self as ::sotu::private::Submachine>::State) -> usize {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::StateExt<
+            Hall,
+        >>::depth(state)
+    }
+    fn state_is_addressed(
+        state: &<Self as ::sotu::private::Submachine>::State,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event) {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::State as ::sotu::blocking::State<
+            Hall,
+        >>::__is_addressed(state, event)
+    }
+    fn superstate_is_addressed<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event)
+    where
+        Self: 'sub,
+    {
+        <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::blocking::Superstate<Hall>>::__is_addressed(superstate, event)
+    }
+}
 impl Hall {
     #[doc(hidden)]
     #[allow(unreachable_code)]

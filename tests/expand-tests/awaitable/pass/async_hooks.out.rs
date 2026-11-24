@@ -146,6 +146,61 @@ impl ::sotu::private::Submachine for Tracer {
     }
 }
 impl ::sotu::private::ExitlessSubmachine for Tracer {}
+impl ::sotu::private::AwaitableSubmachine for Tracer {
+    fn state_superstate<'sub>(
+        state: &'sub mut <Self as ::sotu::private::Submachine>::State,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Tracer,
+        >>::superstate(state)
+    }
+    fn state_same(
+        first: &<Self as ::sotu::private::Submachine>::State,
+        second: &<Self as ::sotu::private::Submachine>::State,
+    ) -> bool {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Tracer,
+        >>::same_state(first, second)
+    }
+    fn superstate_same<'first, 'second>(
+        first: &<Self as ::sotu::private::Submachine>::Superstate<'first>,
+        second: &<Self as ::sotu::private::Submachine>::Superstate<'second>,
+    ) -> bool
+    where
+        Self: 'first + 'second,
+    {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Tracer>>::same_state(first, second)
+    }
+    fn state_depth(state: &mut <Self as ::sotu::private::Submachine>::State) -> usize {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::StateExt<
+            Tracer,
+        >>::depth(state)
+    }
+    fn state_is_addressed(
+        state: &<Self as ::sotu::private::Submachine>::State,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event) {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Tracer,
+        >>::__is_addressed(state, event)
+    }
+    fn superstate_is_addressed<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        event: <Self as ::sotu::private::Submachine>::Event,
+    ) -> (bool, <Self as ::sotu::private::Submachine>::Event)
+    where
+        Self: 'sub,
+    {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Tracer>>::__is_addressed(superstate, event)
+    }
+}
 fn main() {
     let _machine = Tracer { trace: Vec::new() }.state_machine();
 }
