@@ -199,6 +199,22 @@ impl ::sotu::private::AwaitableSubmachine for Blinker {
             '_,
         > as ::sotu::awaitable::Superstate<Blinker>>::__is_addressed(superstate, event)
     }
+    fn superstate_depth<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> usize
+    where
+        Self: 'sub,
+    {
+        superstate.__depth()
+    }
+}
+impl<'sub> Superstate<'sub> {
+    fn __depth(&self) -> usize {
+        match self {
+            Superstate::Outer { .. } => 1usize,
+            Superstate::Blinking { .. } => 2usize,
+        }
+    }
 }
 fn main() {
     let _machine = Blinker::default().state_machine();

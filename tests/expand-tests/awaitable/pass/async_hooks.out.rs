@@ -200,6 +200,14 @@ impl ::sotu::private::AwaitableSubmachine for Tracer {
             '_,
         > as ::sotu::awaitable::Superstate<Tracer>>::__is_addressed(superstate, event)
     }
+    fn superstate_depth<'sub>(
+        _superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> usize
+    where
+        Self: 'sub,
+    {
+        0
+    }
 }
 fn main() {
     let _machine = Tracer { trace: Vec::new() }.state_machine();
