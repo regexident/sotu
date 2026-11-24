@@ -154,6 +154,89 @@ impl ::sotu::private::AwaitableSubmachine for Button {
             '_,
         > as ::sotu::awaitable::Superstate<Button>>::superstate(superstate)
     }
+    fn dispatch_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        event: <Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<
+        Output = ::sotu::private::Dispatched<
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Exit,
+            <Self as ::sotu::private::Submachine>::Event,
+        >,
+    > {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::__dispatch(state, shared_storage, event, context)
+    }
+    fn dispatch_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        event: <Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<
+        Output = ::sotu::private::Dispatched<
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Exit,
+            <Self as ::sotu::private::Submachine>::Event,
+        >,
+    >
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<
+            Button,
+        >>::__dispatch(superstate, shared_storage, event, context)
+    }
+    fn enter_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::call_entry_action(state, shared_storage, context)
+    }
+    fn exit_state<'ctx, 'data: 'ctx>(
+        state: &mut <Self as ::sotu::private::Submachine>::State,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Button,
+        >>::call_exit_action(state, shared_storage, context)
+    }
+    fn enter_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<
+            Button,
+        >>::call_entry_action(superstate, shared_storage, context)
+    }
+    fn exit_superstate<'ctx, 'data: 'ctx, 'sub>(
+        superstate: &mut <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        <<Button as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<
+            Button,
+        >>::call_exit_action(superstate, shared_storage, context)
+    }
 }
 fn main() {
     let _machine = Button::default().state_machine();
