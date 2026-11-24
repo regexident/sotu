@@ -236,6 +236,16 @@ impl ::sotu::private::AwaitableSubmachine for Lamp {
     {
         superstate.__depth()
     }
+    fn superstate_parent<'sub>(
+        superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Lamp as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Lamp>>::superstate(superstate)
+    }
 }
 impl Superstate {
     fn __depth(&self) -> usize {

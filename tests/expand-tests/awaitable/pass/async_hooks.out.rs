@@ -208,6 +208,16 @@ impl ::sotu::private::AwaitableSubmachine for Tracer {
     {
         0
     }
+    fn superstate_parent<'sub>(
+        superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        <<Tracer as ::sotu::awaitable::IntoStateMachine>::Superstate<
+            '_,
+        > as ::sotu::awaitable::Superstate<Tracer>>::superstate(superstate)
+    }
 }
 fn main() {
     let _machine = Tracer { trace: Vec::new() }.state_machine();

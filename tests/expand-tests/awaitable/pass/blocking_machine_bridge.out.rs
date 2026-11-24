@@ -169,6 +169,18 @@ mod door {
         {
             superstate.__depth()
         }
+        fn superstate_parent<'sub>(
+            superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        ) -> ::core::option::Option<
+            <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        >
+        where
+            Self: 'sub,
+        {
+            match superstate {
+                Superstate::Frame {} => ::core::option::Option::None,
+            }
+        }
     }
     impl Superstate {
         fn __depth(&self) -> usize {
@@ -886,6 +898,36 @@ where
         Self: 'sub,
     {
         superstate.__depth()
+    }
+    fn superstate_parent<'sub>(
+        superstate: <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> ::core::option::Option<<Self as ::sotu::private::Submachine>::Superstate<'sub>>
+    where
+        Self: 'sub,
+    {
+        match superstate {
+            Superstate::Lobby { .. } => {
+                ::core::option::Option::Some(Superstate::Region {})
+            }
+            Superstate::Region {} => ::core::option::Option::None,
+            Superstate::Loading(::sotu::SubmachineNode::Mount) => {
+                ::core::option::Option::Some(Superstate::Region {})
+            }
+            Superstate::Loading(::sotu::SubmachineNode::Inner(superstate)) => {
+                ::core::option::Option::Some(
+                    Superstate::Loading(
+                        match <door::Door as ::sotu::private::AwaitableSubmachine>::superstate_parent(
+                            superstate,
+                        ) {
+                            ::core::option::Option::Some(parent) => {
+                                ::sotu::SubmachineNode::Inner(parent)
+                            }
+                            ::core::option::Option::None => ::sotu::SubmachineNode::Mount,
+                        },
+                    ),
+                )
+            }
+        }
     }
 }
 impl<'sub> Superstate<'sub>
