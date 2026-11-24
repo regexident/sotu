@@ -228,6 +228,21 @@ impl ::sotu::private::AwaitableSubmachine for Lamp {
             '_,
         > as ::sotu::awaitable::Superstate<Lamp>>::__is_addressed(superstate, event)
     }
+    fn superstate_depth<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> usize
+    where
+        Self: 'sub,
+    {
+        superstate.__depth()
+    }
+}
+impl Superstate {
+    fn __depth(&self) -> usize {
+        match self {
+            Superstate::Powered { .. } => 1usize,
+        }
+    }
 }
 fn main() {
     let _machine = Lamp::default().state_machine();

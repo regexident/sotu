@@ -161,6 +161,21 @@ mod door {
                 '_,
             > as ::sotu::blocking::Superstate<Door>>::__is_addressed(superstate, event)
         }
+        fn superstate_depth<'sub>(
+            superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        ) -> usize
+        where
+            Self: 'sub,
+        {
+            superstate.__depth()
+        }
+    }
+    impl Superstate {
+        fn __depth(&self) -> usize {
+            match self {
+                Superstate::Frame { .. } => 1usize,
+            }
+        }
     }
 }
 pub struct Hall {
@@ -863,6 +878,32 @@ where
         <<Hall as ::sotu::blocking::IntoStateMachine>::Superstate<
             '_,
         > as ::sotu::blocking::Superstate<Hall>>::__is_addressed(superstate, event)
+    }
+    fn superstate_depth<'sub>(
+        superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> usize
+    where
+        Self: 'sub,
+    {
+        superstate.__depth()
+    }
+}
+impl<'sub> Superstate<'sub>
+where
+    door::Door: ::sotu::private::AwaitableSubmachine,
+{
+    fn __depth(&self) -> usize {
+        match self {
+            Superstate::Lobby { .. } => 2usize,
+            Superstate::Region { .. } => 1usize,
+            Superstate::Loading(::sotu::SubmachineNode::Mount) => 2usize,
+            Superstate::Loading(::sotu::SubmachineNode::Inner(superstate)) => {
+                2usize
+                    + <door::Door as ::sotu::private::AwaitableSubmachine>::superstate_depth(
+                        superstate,
+                    )
+            }
+        }
     }
 }
 impl Hall {

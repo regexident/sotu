@@ -136,6 +136,14 @@ impl ::sotu::private::AwaitableSubmachine for Button {
             '_,
         > as ::sotu::awaitable::Superstate<Button>>::__is_addressed(superstate, event)
     }
+    fn superstate_depth<'sub>(
+        _superstate: &<Self as ::sotu::private::Submachine>::Superstate<'sub>,
+    ) -> usize
+    where
+        Self: 'sub,
+    {
+        0
+    }
 }
 fn main() {
     let _machine = Button::default().state_machine();
