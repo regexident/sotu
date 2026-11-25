@@ -93,4 +93,12 @@ mod awaitable {
             .args(["--features", "async"])
             .and_check();
     }
+
+    #[test]
+    pub fn fail() {
+        tryexpand::expand(["tests/expand-tests/awaitable/fail/**/*.rs"])
+            .args(["--features", "async"])
+            .and_check()
+            .expect_fail();
+    }
 }
