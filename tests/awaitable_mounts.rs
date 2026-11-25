@@ -2,6 +2,7 @@
 
 mod common;
 
+use common::trace;
 use futures::executor::block_on;
 use sotu::prelude::*;
 
@@ -226,4 +227,291 @@ fn awaitable_root_mounts_awaitable_child() {
 
     assert!(matches!(machine.state(), State::Idle {}));
     assert_eq!(machine.cycles, 1);
+}
+
+// MARK: Hooks
+
+mod leaf {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    #[derive(Default)]
+    pub struct Leaf;
+
+    pub struct Ping;
+
+    pub struct Flip;
+
+    #[derive(Event)]
+    pub enum Event {
+        Ping(Ping),
+        Flip(Flip),
+    }
+
+    #[state_machine(
+        initial = State::idle(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after,
+        before_transition = Self::before_transition,
+        after_transition = Self::after_transition
+    )]
+    impl Leaf {
+        fn before(&mut self, node: StateOrSuperstate<'_, State, ()>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(_) => "leaf before leaf-leaf",
+                StateOrSuperstate::Superstate(()) => "leaf before superstate",
+            });
+        }
+
+        fn after(&mut self, node: StateOrSuperstate<'_, State, ()>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(_) => "leaf after leaf-leaf",
+                StateOrSuperstate::Superstate(()) => "leaf after superstate",
+            });
+        }
+
+        fn before_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("leaf before transition");
+        }
+
+        fn after_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("leaf after transition");
+        }
+
+        #[state(entry_action = enter_idle, exit_action = exit_idle)]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Ping(_) => {
+                    trace::record("leaf-leaf handled");
+
+                    Handled
+                }
+                Event::Flip(_) => Transition(State::active()),
+            }
+        }
+
+        #[state(entry_action = enter_active)]
+        fn active() -> Outcome<State> {
+            Handled
+        }
+
+        #[action]
+        fn enter_idle() {
+            trace::record("idle entered");
+        }
+
+        #[action]
+        fn exit_idle() {
+            trace::record("idle exited");
+        }
+
+        #[action]
+        fn enter_active() {
+            trace::record("active entered");
+        }
+    }
+}
+
+mod middle {
+    use sotu::prelude::*;
+
+    use super::common::pending_once::pending_once;
+    use super::{leaf, trace};
+
+    #[derive(Default)]
+    pub struct Middle {
+        pub leaf: Option<leaf::Leaf>,
+    }
+
+    pub struct Enter;
+
+    #[derive(Event)]
+    pub enum Event {
+        Enter(Enter),
+        Ping(leaf::Ping),
+        Flip(leaf::Flip),
+    }
+
+    #[state_machine(
+        initial = State::busy(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after,
+        before_transition = Self::before_transition,
+        after_transition = Self::after_transition,
+        awaitable
+    )]
+    impl Middle {
+        async fn before(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &Event,
+        ) {
+            let entry = match node {
+                StateOrSuperstate::State(State::Nesting(_)) => "middle before leaf-leaf",
+                _ => "middle before other",
+            };
+
+            pending_once().await;
+
+            trace::record(entry);
+        }
+
+        async fn after(
+            &mut self,
+            node: StateOrSuperstate<'_, State, Superstate<'_>>,
+            _event: &Event,
+        ) {
+            let entry = match node {
+                StateOrSuperstate::State(State::Nesting(_)) => "middle after leaf-leaf",
+                _ => "middle after other",
+            };
+
+            pending_once().await;
+
+            trace::record(entry);
+        }
+
+        async fn before_transition(&mut self, _source: &State, _target: &State) {
+            pending_once().await;
+
+            trace::record("middle before transition");
+        }
+
+        async fn after_transition(&mut self, _source: &State, _target: &State) {
+            pending_once().await;
+
+            trace::record("middle after transition");
+        }
+
+        #[state]
+        fn busy(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Enter(_) => Transition(Superstate::nesting()),
+                Event::Ping(_) | Event::Flip(_) => Super,
+            }
+        }
+
+        #[submachine(machine = leaf::Leaf, field = leaf)]
+        fn nesting(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Enter(_) | Event::Ping(_) | Event::Flip(_) => Handled,
+            }
+        }
+    }
+}
+
+mod root {
+    use sotu::prelude::*;
+
+    use super::{leaf, middle, trace};
+
+    #[derive(Default)]
+    pub struct Root {
+        pub middle: Option<middle::Middle>,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Enter(middle::Enter),
+        Ping(leaf::Ping),
+        Flip(leaf::Flip),
+    }
+
+    #[state_machine(
+        initial = Superstate::mount(),
+        before_dispatch = Self::before,
+        after_dispatch = Self::after,
+        before_transition = Self::before_transition,
+        after_transition = Self::after_transition,
+        awaitable
+    )]
+    impl Root {
+        fn before(&mut self, node: StateOrSuperstate<'_, State, Superstate<'_>>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Mount(middle::State::Nesting(_))) => {
+                    "root before leaf-leaf"
+                }
+                _ => "root before other",
+            });
+        }
+
+        fn after(&mut self, node: StateOrSuperstate<'_, State, Superstate<'_>>, _event: &Event) {
+            trace::record(match node {
+                StateOrSuperstate::State(State::Mount(middle::State::Nesting(_))) => {
+                    "root after leaf-leaf"
+                }
+                _ => "root after other",
+            });
+        }
+
+        fn before_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("root before transition");
+        }
+
+        fn after_transition(&mut self, _source: &State, _target: &State) {
+            trace::record("root after transition");
+        }
+
+        #[submachine(machine = middle::Middle, field = middle)]
+        fn mount(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Enter(_) | Event::Ping(_) | Event::Flip(_) => Handled,
+            }
+        }
+    }
+}
+
+#[test]
+fn hooks_nest_across_awaitable_boundary() {
+    let mut machine = root::Root::default().state_machine();
+
+    block_on(machine.init(&mut ()));
+    block_on(machine.handle(middle::Enter, &mut ()));
+    trace::take();
+
+    block_on(machine.handle(leaf::Ping, &mut ()));
+
+    assert_eq!(
+        trace::take(),
+        [
+            "root before leaf-leaf",
+            "middle before leaf-leaf",
+            "leaf before leaf-leaf",
+            "leaf-leaf handled",
+            "leaf after leaf-leaf",
+            "middle after leaf-leaf",
+            "root after leaf-leaf",
+        ]
+    );
+    assert!(matches!(
+        machine.state(),
+        root::State::Mount(middle::State::Nesting(leaf::State::Idle {}))
+    ));
+
+    block_on(machine.handle(leaf::Flip, &mut ()));
+
+    assert_eq!(
+        trace::take(),
+        [
+            "root before leaf-leaf",
+            "middle before leaf-leaf",
+            "leaf before leaf-leaf",
+            "leaf after leaf-leaf",
+            "middle after leaf-leaf",
+            "root after leaf-leaf",
+            "root before transition",
+            "middle before transition",
+            "leaf before transition",
+            "idle exited",
+            "active entered",
+            "leaf after transition",
+            "middle after transition",
+            "root after transition",
+        ]
+    );
+    assert!(matches!(
+        machine.state(),
+        root::State::Mount(middle::State::Nesting(leaf::State::Active {}))
+    ));
 }
