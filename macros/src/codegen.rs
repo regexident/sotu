@@ -20,9 +20,10 @@ use crate::lower::{
 /// Generate the impl block, the node enums and the trait implementations of a machine.
 ///
 /// The traits are those of `sotu::blocking` or of `sotu::awaitable`, as
-/// [`Ir::mode`] selects. Analysis rejects mounts in awaitable machines, so the
-/// mount items, which are blocking only, are generated for blocking machines
-/// alone.
+/// [`Ir::mode`] selects. A blocking machine calls its mounted children through
+/// the blocking traits and so can mount blocking children only. An awaitable
+/// machine calls them through `AwaitableSubmachine` and awaits every call, so
+/// it can mount children of either mode.
 pub(crate) fn generate(ir: &Ir) -> TokenStream {
     let mode = ir.mode;
     let item = &ir.item;
@@ -466,7 +467,8 @@ fn submachine_impls(machine: &MachineIr, mode: Mode) -> TokenStream {
     let (impl_generics, _, where_clause) = machine.generics.split_for_impl();
     let items = machine_items(machine);
 
-    // Only a blocking parent can mount a machine, and it requires this marker.
+    // A blocking parent requires this marker of every child, so only blocking
+    // machines can be mounted in blocking ones.
     let blocking = (mode == Mode::Blocking).then(|| {
         quote! {
             impl #impl_generics ::sotu::private::BlockingSubmachine for #shared_storage
