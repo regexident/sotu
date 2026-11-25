@@ -48,7 +48,7 @@ pub(crate) fn generate(ir: &Ir) -> TokenStream {
 
     let submachine = submachine_impls(&ir.machine, mode);
     let boundary = awaitable_boundary_impl(ir);
-    let projection = projection_impl(&ir.machine, mounts);
+    let projection = projection_impl(&ir.machine, mounts, mode);
 
     quote! {
         #item
@@ -1127,7 +1127,8 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> Token
 
     let same_state =
         (!mounts.is_empty()).then(|| state_same_state_method(name, dispatch, mounts, mode));
-    let boundary = (!mounts.is_empty()).then(|| state_boundary_methods(dispatch, mounts));
+
+    let boundary = (!mounts.is_empty()).then(|| state_boundary_methods(dispatch, mounts, mode));
 
     let internal_transition =
         (!mounts.is_empty()).then(|| internal_transition_methods(dispatch, mounts, mode));
@@ -1240,19 +1241,6 @@ fn state_same_state_method(
     }
 }
 
-/// Return the qualified path to the blocking `State` trait of the child
-/// `machine`'s state type, through which every call into a child state goes.
-fn child_state_trait(machine: &Type) -> TokenStream {
-    state_trait(machine, Mode::Blocking)
-}
-
-/// Return the qualified path to the blocking `Superstate` trait of the child
-/// `machine`'s superstate type, through which every call into a child
-/// superstate goes.
-fn child_superstate_trait(machine: &Type) -> TokenStream {
-    superstate_trait(machine, Mode::Blocking)
-}
-
 // MARK: Child Calls
 
 /// A function through which a parent calls into one of its mounted children.
@@ -1271,10 +1259,17 @@ enum ChildCall {
     StateSame,
     SuperstateSame,
     StateDepth,
+    SuperstateDepth,
+    StateIsAddressed,
+    SuperstateIsAddressed,
+    StateDispatch,
+    SuperstateDispatch,
     StateEntry,
     StateExit,
     SuperstateEntry,
     SuperstateExit,
+    BeforeDispatch,
+    AfterDispatch,
     BeforeTransition,
     AfterTransition,
     InternalTransitionNesting,
@@ -1294,12 +1289,27 @@ fn child_call(machine: &Type, mode: Mode, call: ChildCall) -> TokenStream {
             as ::sotu::blocking::StateExt<#machine>>
     };
 
+    let superstate_extension = quote! {
+        <<#machine as ::sotu::blocking::IntoStateMachine>::Superstate<'_>
+            as ::sotu::blocking::SuperstateExt<#machine>>
+    };
+
     let (blocking, awaitable) = match call {
         ChildCall::StateSuperstate => (quote!(#state_trait::superstate), "state_superstate"),
         ChildCall::SuperstateParent => (quote!(#superstate_trait::superstate), "superstate_parent"),
         ChildCall::StateSame => (quote!(#state_trait::same_state), "state_same"),
         ChildCall::SuperstateSame => (quote!(#superstate_trait::same_state), "superstate_same"),
         ChildCall::StateDepth => (quote!(#state_extension::depth), "state_depth"),
+        ChildCall::SuperstateDepth => (quote!(#superstate_extension::depth), "superstate_depth"),
+        ChildCall::StateIsAddressed => (quote!(#state_trait::__is_addressed), "state_is_addressed"),
+        ChildCall::SuperstateIsAddressed => (
+            quote!(#superstate_trait::__is_addressed),
+            "superstate_is_addressed",
+        ),
+        ChildCall::StateDispatch => (quote!(#state_trait::__dispatch), "dispatch_state"),
+        ChildCall::SuperstateDispatch => {
+            (quote!(#superstate_trait::__dispatch), "dispatch_superstate")
+        }
         ChildCall::StateEntry => (quote!(#state_trait::call_entry_action), "enter_state"),
         ChildCall::StateExit => (quote!(#state_trait::call_exit_action), "exit_state"),
         ChildCall::SuperstateEntry => (
@@ -1310,6 +1320,8 @@ fn child_call(machine: &Type, mode: Mode, call: ChildCall) -> TokenStream {
             quote!(#superstate_trait::call_exit_action),
             "exit_superstate",
         ),
+        ChildCall::BeforeDispatch => (quote!(#machine_trait::before_dispatch), "before_dispatch"),
+        ChildCall::AfterDispatch => (quote!(#machine_trait::after_dispatch), "after_dispatch"),
         ChildCall::BeforeTransition => (
             quote!(#machine_trait::before_transition),
             "before_transition",
@@ -1490,7 +1502,9 @@ fn superstate_dispatch_impl(
     let different_variants =
         (variants.len() > 1 || !mounts.is_empty()).then(|| quote!(_ => false,));
 
-    let boundary = (!mounts.is_empty()).then(|| superstate_boundary_methods(superstate, mounts));
+    let boundary =
+        (!mounts.is_empty()).then(|| superstate_boundary_methods(superstate, mounts, mode));
+
     let module = mode_module(mode);
     let output = method_output(mode, Some(&quote!(::sotu::Outcome<#state, #exit_type>)));
 
@@ -2161,7 +2175,12 @@ fn field_call(mount: &MountIr, trait_name: &str, method: &str) -> TokenStream {
 /// returned unchanged as `Err`. Keeping every use of `SubEvent` for a mount in
 /// this one body reports a child event type that the parent does not list
 /// exactly once, at the value of the `machine` key.
-fn projection_impl(machine: &MachineIr, mounts: &[MountIr]) -> Option<TokenStream> {
+///
+/// An awaitable parent addresses its child nodes synchronously, which a
+/// closure that awaits the child can not do, so it generates a second function
+/// per mount whose `visit` is an async closure, for the dispatch of the child
+/// node.
+fn projection_impl(machine: &MachineIr, mounts: &[MountIr], mode: Mode) -> Option<TokenStream> {
     if mounts.is_empty() {
         return None;
     }
@@ -2172,10 +2191,11 @@ fn projection_impl(machine: &MachineIr, mounts: &[MountIr]) -> Option<TokenStrea
     let event = generated_ident("event");
     let visit = generated_ident("visit");
 
-    let functions = mounts.iter().map(|mount| {
+    let functions = mounts.iter().flat_map(|mount| {
         let MountIr {
             machine: child,
             projection,
+            awaited_projection,
             ..
         } = mount;
 
@@ -2187,28 +2207,44 @@ fn projection_impl(machine: &MachineIr, mounts: &[MountIr]) -> Option<TokenStrea
 
         // A child whose event enum has no variants has an uninhabited event
         // type, so the code after the visit is unreachable.
-        quote! {
-            #[doc(hidden)]
-            #[allow(unreachable_code)]
-            fn #projection<Visited>(
-                #event: #event_type,
-                #visit: impl ::core::ops::FnOnce(#child_event) -> (Visited, #child_event),
-            ) -> ::core::result::Result<(Visited, #event_type), #event_type> {
-                if !#sub_event::accepts(&#event) {
-                    return ::core::result::Result::Err(#event);
-                }
+        let function = |name: &Ident, visit_mode: Mode| {
+            let awaited = awaited(visit_mode);
 
-                match #sub_event::project(#event) {
-                    ::core::result::Result::Ok(child_event) => {
-                        let (visited, child_event) = #visit(child_event);
+            let (asyncness, visit_trait) = match visit_mode {
+                Mode::Blocking => (None, quote!(::core::ops::FnOnce)),
+                Mode::Awaitable => (Some(quote!(async)), quote!(::core::ops::AsyncFnOnce)),
+            };
 
-                        ::core::result::Result::Ok((visited, #sub_event::embed(child_event)))
+            quote! {
+                #[doc(hidden)]
+                #[allow(unreachable_code)]
+                #asyncness fn #name<Visited>(
+                    #event: #event_type,
+                    #visit: impl #visit_trait(#child_event) -> (Visited, #child_event),
+                ) -> ::core::result::Result<(Visited, #event_type), #event_type> {
+                    if !#sub_event::accepts(&#event) {
+                        return ::core::result::Result::Err(#event);
                     }
-                    ::core::result::Result::Err(#event) => ::core::result::Result::Err(#event),
+
+                    match #sub_event::project(#event) {
+                        ::core::result::Result::Ok(child_event) => {
+                            let (visited, child_event) = #visit(child_event)#awaited;
+
+                            ::core::result::Result::Ok((visited, #sub_event::embed(child_event)))
+                        }
+                        ::core::result::Result::Err(#event) => ::core::result::Result::Err(#event),
+                    }
                 }
             }
-        }
+        };
+
+        let awaited_function =
+            (mode == Mode::Awaitable).then(|| function(awaited_projection, Mode::Awaitable));
+
+        [Some(function(projection, Mode::Blocking)), awaited_function]
     });
+
+    let functions: Vec<TokenStream> = functions.flatten().collect();
 
     Some(quote! {
         impl #impl_generics #shared_storage #where_clause {
@@ -2329,6 +2365,20 @@ struct BoundaryContext<'ir> {
     target_type: TokenStream,
     /// The trait whose `call_handler` handles the variants without a child.
     node_trait: TokenStream,
+    /// The mode of the parent, which decides how it calls its children.
+    mode: Mode,
+    /// The calls into a child that report whether it is addressed, dispatch
+    /// to it and measure its depth, for the kind of node that the methods
+    /// visit.
+    node_calls: NodeCalls,
+}
+
+/// The calls into a child with which a parent visits one kind of its nodes.
+#[derive(Clone, Copy)]
+struct NodeCalls {
+    is_addressed: ChildCall,
+    dispatch: ChildCall,
+    depth: ChildCall,
 }
 
 /// Generate the arm of `__is_addressed` for a child node bound as `node`.
@@ -2339,15 +2389,20 @@ fn addressed_arm(
     context: &BoundaryContext<'_>,
     mount: &MountIr,
     pattern: &TokenStream,
-    child_trait: &TokenStream,
 ) -> TokenStream {
     let storage = expression_path(context.shared_storage);
     let projection = &mount.projection;
     let event = generated_ident("event");
 
+    let child_addressed = child_call(
+        &mount.machine,
+        context.mode,
+        context.node_calls.is_addressed,
+    );
+
     quote! {
         #pattern => match #storage::#projection(#event, |#event| {
-            #child_trait::__is_addressed(node, #event)
+            #child_addressed(node, #event)
         }) {
             ::core::result::Result::Ok(addressed) => addressed,
             ::core::result::Result::Err(#event) => (false, #event),
@@ -2368,44 +2423,55 @@ fn dispatch_arm_into_child(
     context: &BoundaryContext<'_>,
     mount: &MountIr,
     pattern: &TokenStream,
-    child_trait: &TokenStream,
-    child_extension: &TokenStream,
     child_node: &TokenStream,
 ) -> TokenStream {
     let storage = expression_path(context.shared_storage);
-    let projection = &mount.projection;
     let machine = &mount.machine;
     let field = &mount.field;
+    let mode = context.mode;
+    let awaited = awaited(mode);
     let shared_storage = generated_ident("shared_storage");
     let event = generated_ident("event");
     let submachine = generated_ident("submachine");
     let outcome = generated_ident("outcome");
     let lifted = lifted_outcome(context.state_name, context.shared_storage, mount, &outcome);
 
+    // An awaitable parent visits through an async closure, so that the visit
+    // can await the child.
+    let (projection, closure) = match mode {
+        Mode::Blocking => (&mount.projection, quote!(|#event|)),
+        Mode::Awaitable => (&mount.awaited_projection, quote!(async |#event|)),
+    };
+
+    let before_dispatch = child_call(machine, mode, ChildCall::BeforeDispatch);
+    let after_dispatch = child_call(machine, mode, ChildCall::AfterDispatch);
+    let child_dispatch = child_call(machine, mode, context.node_calls.dispatch);
+    let child_depth = child_call(machine, mode, context.node_calls.depth);
+
     let before_dispatch = child_context_call(mount, |context| {
         quote! {
-            <#machine as ::sotu::blocking::IntoStateMachine>::before_dispatch(
+            #before_dispatch(
                 #submachine,
                 #child_node,
                 &#event,
                 #context,
-            )
+            )#awaited
         }
     });
 
     let dispatch = child_context_call(
         mount,
-        |context| quote!(#child_trait::__dispatch(node, #submachine, #event, #context)),
+        |context| quote!(#child_dispatch(node, #submachine, #event, #context)#awaited),
     );
 
     let after_dispatch = child_context_call(mount, |context| {
         quote! {
-            <#machine as ::sotu::blocking::IntoStateMachine>::after_dispatch(
+            #after_dispatch(
                 #submachine,
                 #child_node,
                 &event,
                 #context,
-            )
+            )#awaited
         }
     });
 
@@ -2415,7 +2481,7 @@ fn dispatch_arm_into_child(
 
     quote! {
         #pattern => {
-            let mount_offset = #child_extension::depth(node);
+            let mount_offset = #child_depth(node);
 
             let ::core::option::Option::Some(#submachine) = #storage_access else {
                 return ::sotu::private::Dispatched {
@@ -2424,7 +2490,7 @@ fn dispatch_arm_into_child(
                 };
             };
 
-            let visited = #storage::#projection(#event, |#event| {
+            let visited = #storage::#projection(#event, #closure {
                 #before_dispatch;
 
                 let ::sotu::private::Dispatched { outcome, event } = #dispatch;
@@ -2432,7 +2498,7 @@ fn dispatch_arm_into_child(
                 #after_dispatch;
 
                 (outcome, event)
-            });
+            })#awaited;
 
             match visited {
                 ::core::result::Result::Ok((#outcome, #event)) => ::sotu::private::Dispatched {
@@ -2468,6 +2534,7 @@ fn boundary_methods(
         exit_type,
         target_type,
         node_trait,
+        mode,
         ..
     } = context;
 
@@ -2475,6 +2542,7 @@ fn boundary_methods(
     let event = generated_ident("event");
     let ctx = generated_ident("context");
     let (addressed_arms, dispatch_arms): (Vec<_>, Vec<_>) = child_arms.into_iter().unzip();
+    let awaited = awaited(*mode);
 
     let other_addressed = has_other_variants.then(|| quote!(_ => (true, #event),));
 
@@ -2486,7 +2554,7 @@ fn boundary_methods(
                     #shared_storage_parameter,
                     &#event,
                     #ctx,
-                );
+                )#awaited;
 
                 ::sotu::private::Dispatched {
                     outcome: ::sotu::private::NodeOutcome::from(outcome),
@@ -2495,6 +2563,19 @@ fn boundary_methods(
             }
         }
     });
+
+    let dispatched = quote!(::sotu::private::Dispatched<#target_type, #exit_type, #event_type>);
+    let output = method_output(*mode, Some(&dispatched));
+
+    let body = method_body(
+        *mode,
+        quote! {
+            match self {
+                #(#dispatch_arms)*
+                #other_dispatched
+            }
+        },
+    );
 
     // A child whose event enum has no variants has an uninhabited event type,
     // so the code after its dispatch is unreachable.
@@ -2512,20 +2593,18 @@ fn boundary_methods(
             #shared_storage_parameter: &mut #shared_storage,
             #event: #event_type,
             #ctx: &mut #context_type,
-        ) -> ::sotu::private::Dispatched<#target_type, #exit_type, #event_type> {
-            match self {
-                #(#dispatch_arms)*
-                #other_dispatched
-            }
+        ) #output {
+            #body
         }
     }
 }
 
 /// Generate `__is_addressed` and `__dispatch` of the state enum, which visit
 /// the child's leaf state inside each mount variant.
-fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStream {
+fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> TokenStream {
     let name = &dispatch.state.name;
     let shared_storage = &dispatch.shared_storage;
+    let module = mode_module(mode);
 
     let context = BoundaryContext {
         enum_name: name,
@@ -2535,7 +2614,13 @@ fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStr
         context_type: &dispatch.context_type,
         exit_type: &dispatch.exit_type,
         target_type: quote!(Self),
-        node_trait: quote!(::sotu::blocking::State::<#shared_storage>),
+        node_trait: quote!(#module::State::<#shared_storage>),
+        mode,
+        node_calls: NodeCalls {
+            is_addressed: ChildCall::StateIsAddressed,
+            dispatch: ChildCall::StateDispatch,
+            depth: ChildCall::StateDepth,
+        },
     };
 
     let child_arms = mounts
@@ -2543,23 +2628,14 @@ fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStr
         .map(|mount| {
             let enum_name = context.enum_name;
             let variant = &mount.variant;
-            let machine = &mount.machine;
             let pattern = quote!(#enum_name::#variant(node));
-            let child_trait = child_state_trait(machine);
-
-            let child_extension = quote! {
-                <<#machine as ::sotu::blocking::IntoStateMachine>::State
-                    as ::sotu::blocking::StateExt<#machine>>
-            };
 
             (
-                addressed_arm(&context, mount, &pattern, &child_trait),
+                addressed_arm(&context, mount, &pattern),
                 dispatch_arm_into_child(
                     &context,
                     mount,
                     &pattern,
-                    &child_trait,
-                    &child_extension,
                     &quote!(::sotu::StateOrSuperstate::State(&*node)),
                 ),
             )
@@ -2572,8 +2648,13 @@ fn state_boundary_methods(dispatch: &DispatchIr, mounts: &[MountIr]) -> TokenStr
 /// Generate `__is_addressed` and `__dispatch` of the superstate enum, which
 /// visit the child's superstate inside each mount variant. The mount node
 /// itself is handled by the mount handler like any other superstate.
-fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) -> TokenStream {
+fn superstate_boundary_methods(
+    superstate: &SuperstateIr,
+    mounts: &[MountIr],
+    mode: Mode,
+) -> TokenStream {
     let shared_storage = &superstate.shared_storage;
+    let module = mode_module(mode);
 
     let context = BoundaryContext {
         enum_name: &superstate.ty.name,
@@ -2583,7 +2664,13 @@ fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) ->
         context_type: &superstate.context_type,
         exit_type: &superstate.exit_type,
         target_type: state_type(&superstate.state),
-        node_trait: quote!(::sotu::blocking::Superstate::<#shared_storage>),
+        node_trait: quote!(#module::Superstate::<#shared_storage>),
+        mode,
+        node_calls: NodeCalls {
+            is_addressed: ChildCall::SuperstateIsAddressed,
+            dispatch: ChildCall::SuperstateDispatch,
+            depth: ChildCall::SuperstateDepth,
+        },
     };
 
     let child_arms = mounts
@@ -2591,23 +2678,14 @@ fn superstate_boundary_methods(superstate: &SuperstateIr, mounts: &[MountIr]) ->
         .map(|mount| {
             let enum_name = context.enum_name;
             let variant = &mount.variant;
-            let machine = &mount.machine;
             let pattern = quote!(#enum_name::#variant(::sotu::SubmachineNode::Inner(node)));
-            let child_trait = child_superstate_trait(machine);
-
-            let child_extension = quote! {
-                <<#machine as ::sotu::blocking::IntoStateMachine>::Superstate<'_>
-                    as ::sotu::blocking::SuperstateExt<#machine>>
-            };
 
             (
-                addressed_arm(&context, mount, &pattern, &child_trait),
+                addressed_arm(&context, mount, &pattern),
                 dispatch_arm_into_child(
                     &context,
                     mount,
                     &pattern,
-                    &child_trait,
-                    &child_extension,
                     &quote!(::sotu::StateOrSuperstate::Superstate(&*node)),
                 ),
             )
@@ -2657,11 +2735,7 @@ fn internal_transition_methods(
         let variant = &mount.variant;
         let child_depth = child_call(&mount.machine, mode, ChildCall::StateDepth);
 
-        let child_nesting = child_call(
-            &mount.machine,
-            mode,
-            ChildCall::InternalTransitionNesting,
-        );
+        let child_nesting = child_call(&mount.machine, mode, ChildCall::InternalTransitionNesting);
 
         quote! {
             (#name::#variant(source), #name::#variant(#target)) => {
