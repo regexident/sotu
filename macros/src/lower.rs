@@ -79,6 +79,10 @@ pub(crate) struct MountIr {
     /// The hidden associated function of the shared storage that projects a
     /// parent event into the child's event type for the duration of a visit.
     pub(crate) projection: Ident,
+    /// The hidden associated function of the shared storage that projects a
+    /// parent event for a visit that awaits the child, which only an
+    /// awaitable parent generates.
+    pub(crate) awaited_projection: Ident,
     /// The node enclosing the mount node, or `None` for a top-level mount.
     pub(crate) parent: Option<ParentIr>,
     /// The depth of the mount node, counting itself, where a top-level mount
@@ -460,6 +464,7 @@ fn lower_mount(model: &Model, mount: &MountModel) -> MountIr {
         exit_action: lower_mount_action(&model.actions, mount.exit_action.as_ref()),
         exit_handler: lower_exit_handler(model, mount.exit_handler.as_ref()),
         projection: format_ident!("__project_into_{}", mount.constructor),
+        awaited_projection: format_ident!("__project_awaited_into_{}", mount.constructor),
         parent: parent.map(|parent| lower_parent(parent, |_| None)),
         depth: node_depth(model, mount.superstate.as_ref()),
     }
