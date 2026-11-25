@@ -629,3 +629,125 @@ fn awaitable_machine_exposes_boundary() {
         0
     );
 }
+
+// MARK: Mounts
+
+mod door {
+    use sotu::prelude::*;
+
+    #[derive(Default)]
+    pub struct Door;
+
+    #[derive(Event)]
+    pub enum Event {}
+
+    #[state_machine(initial = State::opened())]
+    impl Door {
+        #[state(superstate = panel)]
+        fn opened(event: &Event) -> Outcome<State> {
+            match *event {}
+        }
+
+        #[superstate(superstate = frame)]
+        fn panel(event: &Event) -> Outcome<State> {
+            match *event {}
+        }
+
+        #[superstate]
+        fn frame(event: &Event) -> Outcome<State> {
+            match *event {}
+        }
+    }
+}
+
+mod hall {
+    use sotu::prelude::*;
+
+    use super::door;
+
+    #[derive(Default)]
+    pub struct Hall {
+        pub loading_door: Option<door::Door>,
+        pub lobby_door: Option<door::Door>,
+    }
+
+    #[state_machine(initial = State::idle())]
+    impl Hall {
+        #[state]
+        fn idle() -> Outcome<State> {
+            Handled
+        }
+
+        #[submachine(machine = door::Door, field = loading_door, superstate = region)]
+        fn loading() -> Outcome<State> {
+            Handled
+        }
+
+        #[submachine(machine = door::Door, field = lobby_door)]
+        fn lobby() -> Outcome<State> {
+            Handled
+        }
+
+        #[superstate]
+        fn region() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
+fn chain_length(superstate: hall::Superstate<'_>) -> usize {
+    let mut length = 1;
+    let mut current = superstate;
+
+    while let Some(parent) = <hall::Hall as AwaitableSubmachine>::superstate_parent(current) {
+        length += 1;
+        current = parent;
+    }
+
+    length
+}
+
+#[test]
+fn superstate_depth_is_static_per_variant() {
+    use hall::Superstate::{Loading, Lobby, Region};
+    use sotu::SubmachineNode::{Inner, Mount};
+
+    let depth = |superstate| <hall::Hall as AwaitableSubmachine>::superstate_depth(&superstate);
+
+    // A mount is as deep as the superstates that enclose it, and the
+    // superstates of its child count on top of the mount node.
+    assert_eq!(depth(Region {}), 1);
+    assert_eq!(depth(Loading(Mount)), 2);
+    assert_eq!(depth(Loading(Inner(door::Superstate::Frame {}))), 3);
+    assert_eq!(depth(Loading(Inner(door::Superstate::Panel {}))), 4);
+    assert_eq!(depth(Lobby(Mount)), 1);
+    assert_eq!(depth(Lobby(Inner(door::Superstate::Frame {}))), 2);
+    assert_eq!(depth(Lobby(Inner(door::Superstate::Panel {}))), 3);
+
+    // The static depth of a variant is the length of the chain of parents
+    // that is built above it.
+    assert_eq!(chain_length(Region {}), 1);
+    assert_eq!(chain_length(Loading(Mount)), 2);
+    assert_eq!(chain_length(Loading(Inner(door::Superstate::Frame {}))), 3);
+    assert_eq!(chain_length(Loading(Inner(door::Superstate::Panel {}))), 4);
+    assert_eq!(chain_length(Lobby(Mount)), 1);
+    assert_eq!(chain_length(Lobby(Inner(door::Superstate::Frame {}))), 2);
+    assert_eq!(chain_length(Lobby(Inner(door::Superstate::Panel {}))), 3);
+
+    // A leaf is one level deeper than its superstate.
+    let mut opened = hall::State::loading(door::State::opened());
+
+    let Some(superstate) = <hall::Hall as AwaitableSubmachine>::state_superstate(&mut opened)
+    else {
+        panic!("a mounted leaf has a superstate");
+    };
+
+    assert_eq!(
+        <hall::Hall as AwaitableSubmachine>::superstate_depth(&superstate),
+        4
+    );
+    assert_eq!(
+        <hall::Hall as AwaitableSubmachine>::state_depth(&mut opened),
+        5
+    );
+}
