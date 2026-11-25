@@ -188,3 +188,219 @@ fn blocking_machine_bridges_hierarchy_queries() {
         &second_outer
     ));
 }
+
+#[test]
+fn blocking_machine_bridges_dispatch_as_ready_future() {
+    use futures::FutureExt as _;
+    use nested::{Bump, Event, Nested, State};
+    use sotu::StateOrSuperstate;
+    use sotu::private::{Dispatched, NodeOutcome};
+
+    let mut storage = Nested::default();
+    let mut state = State::on(0);
+
+    let mut reference_storage = Nested::default();
+    let mut reference_state = State::on(0);
+
+    let expected = <State as sotu::blocking::State<Nested>>::__dispatch(
+        &mut reference_state,
+        &mut reference_storage,
+        Event::Bump(Bump),
+        &mut (),
+    );
+
+    assert_eq!(
+        expected,
+        Dispatched {
+            outcome: NodeOutcome::Transition(State::off()),
+            event: Event::Bump(Bump),
+        }
+    );
+
+    // A blocking machine runs to completion when the future is created, so
+    // the future is ready on its first poll.
+    let dispatched = <Nested as AwaitableSubmachine>::dispatch_state(
+        &mut state,
+        &mut storage,
+        Event::Bump(Bump),
+        &mut (),
+    )
+    .now_or_never();
+
+    assert_eq!(dispatched, Some(expected));
+    assert_eq!(state, reference_state);
+    assert_eq!(state, State::on(1));
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::state_is_addressed(&state, Event::Bump(Bump)),
+        (true, Event::Bump(Bump))
+    );
+
+    // The superstates dispatch to their own handlers and defer upwards.
+    let Some(mut inner) = <Nested as AwaitableSubmachine>::state_superstate(&mut state) else {
+        panic!("`on` has no superstate");
+    };
+
+    let dispatched = <Nested as AwaitableSubmachine>::dispatch_superstate(
+        &mut inner,
+        &mut storage,
+        Event::Bump(Bump),
+        &mut (),
+    )
+    .now_or_never();
+
+    assert_eq!(
+        dispatched,
+        Some(Dispatched {
+            outcome: NodeOutcome::Super,
+            event: Event::Bump(Bump),
+        })
+    );
+
+    let Some(mut outer) = <Nested as AwaitableSubmachine>::superstate_parent(inner) else {
+        panic!("`inner` has no parent");
+    };
+
+    let dispatched = <Nested as AwaitableSubmachine>::dispatch_superstate(
+        &mut outer,
+        &mut storage,
+        Event::Bump(Bump),
+        &mut (),
+    )
+    .now_or_never();
+
+    assert_eq!(
+        dispatched,
+        Some(Dispatched {
+            outcome: NodeOutcome::Transition(State::off()),
+            event: Event::Bump(Bump),
+        })
+    );
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::superstate_is_addressed(&outer, Event::Bump(Bump)),
+        (true, Event::Bump(Bump))
+    );
+
+    // Actions and hooks run on the shared storage when their futures are
+    // created, in the order the boundary is called.
+    let mut storage = Nested::default();
+    let mut state = State::on(0);
+    let event = Event::Bump(Bump);
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::enter_state(&mut state, &mut storage, &mut ())
+            .now_or_never(),
+        Some(())
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::exit_state(&mut state, &mut storage, &mut ())
+            .now_or_never(),
+        Some(())
+    );
+
+    let Some(mut inner) = <Nested as AwaitableSubmachine>::state_superstate(&mut state) else {
+        panic!("`on` has no superstate");
+    };
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::enter_superstate(&mut inner, &mut storage, &mut ())
+            .now_or_never(),
+        Some(())
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::exit_superstate(&mut inner, &mut storage, &mut ())
+            .now_or_never(),
+        Some(())
+    );
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::before_dispatch(
+            &mut storage,
+            StateOrSuperstate::Superstate(&inner),
+            &event,
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::after_dispatch(
+            &mut storage,
+            StateOrSuperstate::Superstate(&inner),
+            &event,
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::before_transition(
+            &mut storage,
+            &State::on(0),
+            &State::off(),
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::after_transition(
+            &mut storage,
+            &State::on(0),
+            &State::off(),
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+
+    assert_eq!(
+        storage.trace,
+        [
+            "enter on",
+            "exit on",
+            "enter inner",
+            "exit inner",
+            "before dispatch",
+            "after dispatch",
+            "before transition",
+            "after transition",
+        ]
+    );
+
+    // A machine without mounts has no instances to run transition hooks of.
+    let mut storage = Nested::default();
+    let mut source = State::on(0);
+    let mut target = State::off();
+
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::internal_transition_nesting(&mut source, &mut target, 3),
+        0
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::before_internal_transition(
+            &mut source,
+            &mut target,
+            3,
+            0,
+            &mut storage,
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+    assert_eq!(
+        <Nested as AwaitableSubmachine>::after_internal_transition(
+            &mut source,
+            &mut target,
+            3,
+            0,
+            &mut storage,
+            &mut ()
+        )
+        .now_or_never(),
+        Some(())
+    );
+    assert!(storage.trace.is_empty());
+}
