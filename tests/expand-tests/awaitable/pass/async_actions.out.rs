@@ -329,6 +329,119 @@ impl ::sotu::private::AwaitableSubmachine for Lamp {
             Lamp,
         >>::call_exit_action(superstate, shared_storage, context)
     }
+    fn before_dispatch<'ctx, 'data: 'ctx, 'sub>(
+        shared_storage: &mut Self,
+        node: ::sotu::StateOrSuperstate<
+            '_,
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        >,
+        event: &<Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        <Lamp as ::sotu::awaitable::IntoStateMachine>::before_dispatch(
+            shared_storage,
+            node,
+            event,
+            context,
+        )
+    }
+    fn after_dispatch<'ctx, 'data: 'ctx, 'sub>(
+        shared_storage: &mut Self,
+        node: ::sotu::StateOrSuperstate<
+            '_,
+            <Self as ::sotu::private::Submachine>::State,
+            <Self as ::sotu::private::Submachine>::Superstate<'sub>,
+        >,
+        event: &<Self as ::sotu::private::Submachine>::Event,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()>
+    where
+        Self: 'sub,
+    {
+        <Lamp as ::sotu::awaitable::IntoStateMachine>::after_dispatch(
+            shared_storage,
+            node,
+            event,
+            context,
+        )
+    }
+    fn before_transition<'ctx, 'data: 'ctx>(
+        shared_storage: &mut Self,
+        source: &<Self as ::sotu::private::Submachine>::State,
+        target: &<Self as ::sotu::private::Submachine>::State,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <Lamp as ::sotu::awaitable::IntoStateMachine>::before_transition(
+            shared_storage,
+            source,
+            target,
+            context,
+        )
+    }
+    fn after_transition<'ctx, 'data: 'ctx>(
+        shared_storage: &mut Self,
+        source: &<Self as ::sotu::private::Submachine>::State,
+        target: &<Self as ::sotu::private::Submachine>::State,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <Lamp as ::sotu::awaitable::IntoStateMachine>::after_transition(
+            shared_storage,
+            source,
+            target,
+            context,
+        )
+    }
+    fn internal_transition_nesting(
+        source: &mut <Self as ::sotu::private::Submachine>::State,
+        target: &mut <Self as ::sotu::private::Submachine>::State,
+        exit_levels: usize,
+    ) -> usize {
+        <<Lamp as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Lamp,
+        >>::__internal_transition_nesting(source, target, exit_levels)
+    }
+    fn before_internal_transition<'ctx, 'data: 'ctx>(
+        source: &mut <Self as ::sotu::private::Submachine>::State,
+        target: &mut <Self as ::sotu::private::Submachine>::State,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <<Lamp as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Lamp,
+        >>::__before_internal_transition(
+            source,
+            target,
+            exit_levels,
+            nesting,
+            shared_storage,
+            context,
+        )
+    }
+    fn after_internal_transition<'ctx, 'data: 'ctx>(
+        source: &mut <Self as ::sotu::private::Submachine>::State,
+        target: &mut <Self as ::sotu::private::Submachine>::State,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Self,
+        context: &mut <Self as ::sotu::private::Submachine>::Context<'ctx, 'data>,
+    ) -> impl ::core::future::Future<Output = ()> {
+        <<Lamp as ::sotu::awaitable::IntoStateMachine>::State as ::sotu::awaitable::State<
+            Lamp,
+        >>::__after_internal_transition(
+            source,
+            target,
+            exit_levels,
+            nesting,
+            shared_storage,
+            context,
+        )
+    }
 }
 impl Superstate {
     fn __depth(&self) -> usize {
