@@ -160,3 +160,70 @@ fn awaitable_root_mounts_blocking_child() {
     assert!(matches!(machine.state(), State::Idle {}));
     assert_eq!(machine.cycles, 1);
 }
+
+mod awaitable_door {
+    use sotu::prelude::*;
+
+    use super::DoorExit;
+    use super::common::pending_once::pending_once;
+    use super::events::DoorEvent;
+
+    #[derive(Default)]
+    pub struct Door {
+        pub openings: u32,
+    }
+
+    #[state_machine(initial = State::opened(), exit = DoorExit)]
+    impl Door {
+        #[state(entry_action = count_opening)]
+        fn opened(event: &DoorEvent) -> Outcome<State, DoorExit> {
+            match event {
+                DoorEvent::Close(_) => Exit(DoorExit::Closed),
+                DoorEvent::Open(_) => Handled,
+            }
+        }
+
+        #[action]
+        async fn count_opening(&mut self) {
+            pending_once().await;
+
+            self.openings += 1;
+        }
+    }
+}
+
+washer!(washer_with_awaitable_door, awaitable_door);
+
+#[test]
+fn awaitable_root_mounts_awaitable_child() {
+    use events::{Close, Start, Tick};
+    use washer_with_awaitable_door::{State, Washer};
+
+    let mut machine = Washer::default().state_machine();
+
+    block_on(machine.init(&mut ()));
+    block_on(machine.handle(Start, &mut ()));
+
+    assert!(matches!(
+        machine.state(),
+        State::Loading(awaitable_door::State::Opened {})
+    ));
+    assert_eq!(machine.door.as_ref().map(|door| door.openings), Some(1));
+
+    block_on(machine.handle(Tick, &mut ()));
+
+    assert!(matches!(
+        machine.state(),
+        State::Loading(awaitable_door::State::Opened {})
+    ));
+
+    block_on(machine.handle(Close, &mut ()));
+
+    assert!(matches!(machine.state(), State::Washing {}));
+    assert!(machine.door.is_none());
+
+    block_on(machine.handle(Tick, &mut ()));
+
+    assert!(matches!(machine.state(), State::Idle {}));
+    assert_eq!(machine.cycles, 1);
+}
