@@ -404,3 +404,228 @@ fn blocking_machine_bridges_dispatch_as_ready_future() {
     );
     assert!(storage.trace.is_empty());
 }
+
+// MARK: Awaitable Machine
+
+mod awaiting {
+    use sotu::prelude::*;
+
+    use crate::common::pending_once::pending_once;
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct Bump;
+
+    #[derive(Event, Debug, PartialEq, Eq)]
+    pub enum Event {
+        Bump(Bump),
+    }
+
+    #[derive(Default)]
+    pub struct Awaiting {
+        pub trace: Vec<&'static str>,
+    }
+
+    #[state_machine(
+        initial = State::on(0),
+        state(derive(Debug, PartialEq, Eq)),
+        superstate(derive(Debug, PartialEq, Eq)),
+        awaitable
+    )]
+    impl Awaiting {
+        #[state(
+            superstate = inner,
+            entry_action = enter_on,
+            exit_action = exit_on
+        )]
+        async fn on(counter: &mut u32, event: &Event) -> Outcome<State> {
+            pending_once().await;
+
+            match event {
+                Event::Bump(_) => {
+                    *counter += 1;
+
+                    Transition(State::off())
+                }
+            }
+        }
+
+        #[state]
+        fn off(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Bump(_) => Handled,
+            }
+        }
+
+        #[superstate(superstate = outer)]
+        async fn inner(counter: &mut u32, event: &Event) -> Outcome<State> {
+            pending_once().await;
+
+            match event {
+                Event::Bump(_) => {
+                    *counter += 10;
+
+                    Super
+                }
+            }
+        }
+
+        #[superstate]
+        fn outer(counter: &u32, event: &Event) -> Outcome<State> {
+            match event {
+                Event::Bump(_) => {
+                    if *counter == 0 {
+                        Handled
+                    } else {
+                        Transition(State::off())
+                    }
+                }
+            }
+        }
+
+        #[action]
+        async fn enter_on(&mut self) {
+            pending_once().await;
+
+            self.trace.push("enter on");
+        }
+
+        #[action]
+        fn exit_on(&mut self) {
+            self.trace.push("exit on");
+        }
+    }
+}
+
+#[test]
+fn awaitable_machine_exposes_boundary() {
+    use core::pin::pin;
+    use core::task::{Context, Waker};
+
+    use awaiting::{Awaiting, Bump, Event, State, Superstate};
+    use futures::executor::block_on;
+    use sotu::private::{Dispatched, NodeOutcome};
+
+    let mut storage = Awaiting::default();
+    let mut state = State::on(7);
+
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::state_depth(&mut state),
+        3
+    );
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::state_depth(&mut State::off()),
+        1
+    );
+    assert!(<Awaiting as AwaitableSubmachine>::state_same(
+        &state,
+        &State::on(8)
+    ));
+    assert!(!<Awaiting as AwaitableSubmachine>::state_same(
+        &state,
+        &State::off()
+    ));
+
+    // The walk up the hierarchy consumes each superstate and moves the
+    // borrowed storage into its parent.
+    let Some(mut inner) = <Awaiting as AwaitableSubmachine>::state_superstate(&mut state) else {
+        panic!("`on` has no superstate");
+    };
+
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::superstate_depth(&inner),
+        2
+    );
+
+    // An awaitable dispatch awaits the handler, so it suspends once.
+    let dispatched = {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut unit = ();
+
+        let mut dispatch = pin!(<Awaiting as AwaitableSubmachine>::dispatch_superstate(
+            &mut inner,
+            &mut storage,
+            Event::Bump(Bump),
+            &mut unit,
+        ));
+
+        assert!(dispatch.as_mut().poll(&mut context).is_pending());
+
+        block_on(dispatch)
+    };
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::Super,
+            event: Event::Bump(Bump),
+        }
+    );
+
+    let Some(outer) = <Awaiting as AwaitableSubmachine>::superstate_parent(inner) else {
+        panic!("`inner` has no parent");
+    };
+
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::superstate_depth(&outer),
+        1
+    );
+    assert!(matches!(&outer, Superstate::Outer { counter } if **counter == 17));
+    assert!(<Awaiting as AwaitableSubmachine>::superstate_same(
+        &outer, &outer
+    ));
+    assert!(<Awaiting as AwaitableSubmachine>::superstate_parent(outer).is_none());
+
+    let mut reference_storage = Awaiting::default();
+    let mut reference_state = State::on(0);
+
+    let expected = block_on(<State as sotu::awaitable::State<Awaiting>>::__dispatch(
+        &mut reference_state,
+        &mut reference_storage,
+        Event::Bump(Bump),
+        &mut (),
+    ));
+
+    let mut other_state = State::on(0);
+
+    let dispatched = block_on(<Awaiting as AwaitableSubmachine>::dispatch_state(
+        &mut other_state,
+        &mut storage,
+        Event::Bump(Bump),
+        &mut (),
+    ));
+
+    assert_eq!(
+        dispatched,
+        Dispatched {
+            outcome: NodeOutcome::Transition(State::off()),
+            event: Event::Bump(Bump),
+        }
+    );
+    assert_eq!(dispatched, expected);
+    assert_eq!(other_state, reference_state);
+
+    block_on(<Awaiting as AwaitableSubmachine>::enter_state(
+        &mut other_state,
+        &mut storage,
+        &mut (),
+    ));
+    block_on(<Awaiting as AwaitableSubmachine>::exit_state(
+        &mut other_state,
+        &mut storage,
+        &mut (),
+    ));
+
+    assert_eq!(storage.trace, ["enter on", "exit on"]);
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::state_is_addressed(&other_state, Event::Bump(Bump)),
+        (true, Event::Bump(Bump))
+    );
+    assert_eq!(
+        <Awaiting as AwaitableSubmachine>::internal_transition_nesting(
+            &mut state,
+            &mut other_state,
+            1
+        ),
+        0
+    );
+}
