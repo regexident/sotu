@@ -1,0 +1,797 @@
+error[E0277]: `Door` is an awaitable state machine and can not be mounted in a blocking one
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `BlockingSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:7:5
+   |
+ 7 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: add `awaitable` to the parent's `#[state_machine]`
+   = help: the trait `BlockingSubmachine` is implemented for `Hall`
+note: required for `State` to implement `sotu::blocking::State<Hall>`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+30 |     #[submachine(machine = door::Door, field = door)]
+   |                            ---- unsatisfied trait bound introduced here
+note: required by a bound in `sotu::blocking::IntoStateMachine::State`
+  --> /src/blocking/into_state_machine.rs:31:17
+   |
+31 |     type State: State<Self>;
+   |                 ^^^^^^^^^^^ required by this bound in `IntoStateMachine::State`
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Door` is an awaitable state machine and can not be mounted in a blocking one
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `BlockingSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:7:5
+   |
+ 7 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: add `awaitable` to the parent's `#[state_machine]`
+   = help: the trait `BlockingSubmachine` is implemented for `Hall`
+note: required for `Superstate<'sub>` to implement `sotu::blocking::Superstate<Hall>`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+30 |     #[submachine(machine = door::Door, field = door)]
+   |                            ---- unsatisfied trait bound introduced here
+note: required by a bound in `sotu::blocking::IntoStateMachine::Superstate`
+  --> /src/blocking/into_state_machine.rs:38:28
+   |
+38 |     type Superstate<'sub>: Superstate<Self>
+   |                            ^^^^^^^^^^^^^^^^ required by this bound in `IntoStateMachine::Superstate`
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `Door` is an awaitable state machine and can not be mounted in a blocking one
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:30:28
+   |
+30 |     #[submachine(machine = door::Door, field = door)]
+   |                            ^^^^ unsatisfied trait bound
+   |
+help: the trait `BlockingSubmachine` is not implemented for `Door`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:7:5
+   |
+ 7 |     pub struct Door;
+   |     ^^^^^^^^^^^^^^^
+   = note: add `awaitable` to the parent's `#[state_machine]`
+   = help: the trait `BlockingSubmachine` is implemented for `Hall`
+   = help: see issue #48214
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:26:8
+   |
+26 |     fn call_entry_action<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:34:8
+   |
+34 |     fn call_exit_action<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: method defined here
+  --> /src/blocking/state.rs:45:8
+   |
+45 |     fn superstate(&mut self) -> Option<M::Superstate<'_>> {
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `()`, found associated type
+   | arguments to this enum variant are incorrect
+   |
+   = note:    expected unit type `()`
+           found associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+help: the type constructed contains `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` due to the type of the argument passed
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this argument influences the type of `Inner`
+note: tuple variant defined here
+  --> /src/node.rs:41:5
+   |
+41 |     Inner(S),
+   |     ^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&<Door as IntoStateMachine>::State`, found `&State`
+   | expected `&<Door as IntoStateMachine>::State`, found `&State`
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+              found reference `&door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+              found reference `&door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: method defined here
+  --> /src/blocking/state.rs:53:8
+   |
+53 |     fn same_state(&self, other: &Self) -> bool {
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&<Door as IntoStateMachine>::State`, found `&State`
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+              found reference `&door::State`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::State` to `door::State`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected associated type, found `()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected associated type `<Door as sotu::blocking::IntoStateMachine>::Event`
+                    found unit type `()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:58:8
+   |
+58 |     fn __is_addressed(&self, event: M::Event) -> (bool, M::Event) {
+   |        ^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `(_, ())`, found `(bool, <... as IntoStateMachine>::Event)`
+   |
+   = note: expected tuple `(_, ())`
+              found tuple `(bool, <Door as sotu::blocking::IntoStateMachine>::Event)`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: method defined here
+  --> /src/blocking/ext.rs:17:8
+   |
+17 |     fn depth(&mut self) -> usize;
+   |        ^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&<Door as IntoStateMachine>::State`, found `&State`
+   | arguments to this enum variant are incorrect
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+              found reference `&door::State`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::State` to `door::State`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: tuple variant defined here
+  --> /src/node.rs:16:5
+   |
+16 |     State(&'a State),
+   |     ^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&<Door as IntoStateMachine>::Event`, found `&()`
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::Event`
+              found reference `&()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/into_state_machine.rs:49:8
+   |
+49 |     fn before_dispatch<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::State` to `door::State`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected associated type, found `()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected associated type `<Door as sotu::blocking::IntoStateMachine>::Event`
+                    found unit type `()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:63:8
+   |
+63 |     fn __dispatch<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut ...`, found `&mut ()`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/into_state_machine.rs:58:8
+   |
+58 |     fn after_dispatch<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `()`, found associated type
+   |
+   = note:    expected unit type `()`
+           found associated type `<Door as sotu::blocking::IntoStateMachine>::Event`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `State`, found associated type
+   | arguments to this enum variant are incorrect
+   |
+   = note:         expected enum `door::State`
+           found associated type `<Door as sotu::blocking::IntoStateMachine>::State`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::State` to `door::State`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: tuple variant defined here
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:31:8
+   |
+31 |     fn loading() -> Outcome<State> {
+   |        ^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: method defined here
+  --> /src/blocking/state.rs:78:8
+   |
+78 |     fn __internal_transition_nesting(&mut self, _target: &mut Self, _exit_levels: usize) -> usize {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&<Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note:      expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+           found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&<Door as IntoStateMachine>::State`, found `&mut State`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note:      expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+           found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/into_state_machine.rs:68:8
+   |
+68 |     fn before_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:83:8
+   |
+83 |     fn __before_internal_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&<Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note:      expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+           found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&<Door as IntoStateMachine>::State`, found `&mut State`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note:      expected reference `&<Door as sotu::blocking::IntoStateMachine>::State`
+           found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/into_state_machine.rs:78:8
+   |
+78 |     fn after_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut <Door as IntoStateMachine>::State`, found `&mut State`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::State`
+              found mutable reference `&mut door::State`
+help: a method is available that returns `<Door as sotu::blocking::IntoStateMachine>::State`
+  --> /src/blocking/into_state_machine.rs:46:5
+   |
+46 |     fn initial() -> Self::State;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider calling `sotu::blocking::IntoStateMachine::initial`
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/state.rs:94:8
+   |
+94 |     fn __after_internal_transition<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut ...`, found `&mut ()`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:29:8
+   |
+29 |     fn call_entry_action<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut ...`, found `&mut ()`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:37:8
+   |
+37 |     fn call_exit_action<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&mut ...`, found `&mut ()`
+   | arguments to this function are incorrect
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:47:8
+   |
+47 |     fn superstate(&mut self) -> Option<M::Superstate<'_>>
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&...`, found `&()`
+   | expected `&...`, found `&()`
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found reference `&()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found reference `&()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:59:8
+   |
+59 |     fn same_state(&self, other: &M::Superstate<'_>) -> bool;
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&...`, found `&()`
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found reference `&()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected associated type, found `()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected associated type `<Door as sotu::blocking::IntoStateMachine>::Event`
+                    found unit type `()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:62:8
+   |
+62 |     fn __is_addressed(&self, event: M::Event) -> (bool, M::Event) {
+   |        ^^^^^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+   --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+    |
+ 23 | #[state_machine(initial = State::idle())]
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    | |
+    | expected `&mut ...`, found `&mut ()`
+    | arguments to this function are incorrect
+    |
+    = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+               found mutable reference `&mut ()`
+    = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()` or calling a method that returns `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+    = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+   --> /src/blocking/ext.rs:336:8
+    |
+336 |     fn depth(&mut self) -> usize;
+    |        ^^^^^
+    = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | |
+   | expected `&...`, found `&()`
+   | arguments to this enum variant are incorrect
+   |
+   = note: expected reference `&<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found reference `&()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: tuple variant defined here
+  --> /src/node.rs:18:5
+   |
+18 |     Superstate(&'a Superstate),
+   |     ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: arguments to this function are incorrect
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&mut ...`, found `&mut ()`
+   |
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Superstate<'_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Superstate<'_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected associated type, found `()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected associated type `<Door as sotu::blocking::IntoStateMachine>::Event`
+                    found unit type `()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Event` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: expected `&mut ...`, found `&mut ()`
+  --> /tests/expand-tests/awaitable/fail/awaitable_child_in_blocking_parent.rs:23:1
+   |
+23 | #[state_machine(initial = State::idle())]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: expected mutable reference `&mut <Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>`
+              found mutable reference `&mut ()`
+   = help: consider constraining the associated type `<Door as sotu::blocking::IntoStateMachine>::Context<'_, '_>` to `()`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+note: method defined here
+  --> /src/blocking/superstate.rs:67:8
+   |
+67 |     fn __dispatch<'ctx, 'data: 'ctx>(
+   |        ^^^^^^^^^^
+   = note: this error originates in the attribute macro `state_machine` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `<CRATE>` (bin "<BIN>") due to 41 previous errors
