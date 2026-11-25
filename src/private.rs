@@ -272,6 +272,85 @@ pub trait AwaitableSubmachine: Submachine {
     ) -> impl Future<Output = ()>
     where
         Self: 'sub;
+
+    /// Run the dispatch hook that observes `event` just before `node` handles
+    /// it.
+    fn before_dispatch<'ctx, 'data: 'ctx, 'sub>(
+        shared_storage: &mut Self,
+        node: crate::StateOrSuperstate<'_, Self::State, Self::Superstate<'sub>>,
+        event: &Self::Event,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>
+    where
+        Self: 'sub;
+
+    /// Run the dispatch hook that observes `event` just after `node` handled
+    /// it.
+    fn after_dispatch<'ctx, 'data: 'ctx, 'sub>(
+        shared_storage: &mut Self,
+        node: crate::StateOrSuperstate<'_, Self::State, Self::Superstate<'sub>>,
+        event: &Self::Event,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>
+    where
+        Self: 'sub;
+
+    /// Run the transition hook that observes a transition from `source` to
+    /// `target` just before any exit action runs.
+    fn before_transition<'ctx, 'data: 'ctx>(
+        shared_storage: &mut Self,
+        source: &Self::State,
+        target: &Self::State,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+
+    /// Run the transition hook that observes a transition from `source` to
+    /// `target` just after the last entry action ran.
+    fn after_transition<'ctx, 'data: 'ctx>(
+        shared_storage: &mut Self,
+        source: &Self::State,
+        target: &Self::State,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+
+    /// Return the number of nested mounted instances that a transition from
+    /// `source` to `target` stays inside when it exits `exit_levels` levels.
+    fn internal_transition_nesting(
+        source: &mut Self::State,
+        target: &mut Self::State,
+        exit_levels: usize,
+    ) -> usize;
+
+    /// Run the transition hooks of the mounted instances that a transition
+    /// from `source` to `target` stays inside, before any exit action runs.
+    ///
+    /// `nesting` is the value of
+    /// [`internal_transition_nesting`](AwaitableSubmachine::internal_transition_nesting)
+    /// for the same transition.
+    fn before_internal_transition<'ctx, 'data: 'ctx>(
+        source: &mut Self::State,
+        target: &mut Self::State,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
+
+    /// Run the transition hooks of the mounted instances that a transition
+    /// from `source` to `target` stays inside, after the last entry action
+    /// ran.
+    ///
+    /// `nesting` is the value of
+    /// [`internal_transition_nesting`](AwaitableSubmachine::internal_transition_nesting)
+    /// for the same transition.
+    fn after_internal_transition<'ctx, 'data: 'ctx>(
+        source: &mut Self::State,
+        target: &mut Self::State,
+        exit_levels: usize,
+        nesting: usize,
+        shared_storage: &mut Self,
+        context: &mut Self::Context<'ctx, 'data>,
+    ) -> impl Future<Output = ()>;
 }
 
 /// A [`NodeOutcome`] together with the event it was produced for.
