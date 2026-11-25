@@ -314,8 +314,6 @@ struct Nodes {
     superstates: Vec<SuperstateModel>,
     /// The mount handlers.
     mounts: Vec<MountModel>,
-    /// The `#[submachine]` attributes of the mount handlers, in the same order.
-    mount_attributes: Vec<Attribute>,
     /// The entry and exit actions.
     actions: Vec<ActionModel>,
     /// The exit handlers.
@@ -369,7 +367,6 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
             states,
             superstates,
             mounts,
-            mount_attributes,
             actions,
             exit_handlers,
             event_type,
@@ -394,8 +391,6 @@ pub(crate) fn analyze(arguments: MachineArgs, mut item: ItemImpl) -> syn::Result
     };
 
     let mode = machine_mode(arguments.awaitable, &nodes, &hooks, &item);
-
-    check_awaitable_mounts(mode, &mount_attributes, &mut errors);
 
     check_duplicate_variants(&states, &superstates, &mounts, &mut errors);
     check_links(&states, &superstates, &mounts, &actions, &mut errors);
@@ -472,7 +467,6 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
     let mut states = Vec::new();
     let mut superstates = Vec::new();
     let mut mounts = Vec::new();
-    let mut mount_attributes = Vec::new();
     let mut actions = Vec::new();
     let mut exit_handlers = Vec::new();
     let mut event_type = None;
@@ -540,7 +534,6 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
                     &mut event_type,
                     &mut errors,
                 ));
-                mount_attributes.push(source);
             }
             (ItemAttribute::Action, ImplItem::Fn(function)) => {
                 let attachment = attachments
@@ -605,7 +598,6 @@ fn collect_nodes(item: &mut ItemImpl, names: &InputNames) -> (Nodes, Option<syn:
         states,
         superstates,
         mounts,
-        mount_attributes,
         actions,
         exit_handlers,
         event_type,
@@ -1864,23 +1856,6 @@ fn is_async_function(item: &ItemImpl, path: &Path) -> bool {
                 if function.sig.ident == *name && function.sig.asyncness.is_some()
         )
     })
-}
-
-/// Report the `#[submachine]` attribute of every mount of an awaitable machine.
-fn check_awaitable_mounts(mode: Mode, attributes: &[Attribute], errors: &mut Option<syn::Error>) {
-    if mode == Mode::Blocking {
-        return;
-    }
-
-    for attribute in attributes {
-        push_error(
-            errors,
-            syn::Error::new_spanned(
-                attribute,
-                "submachines in awaitable machines require the awaitable boundary",
-            ),
-        );
-    }
 }
 
 // MARK: Names

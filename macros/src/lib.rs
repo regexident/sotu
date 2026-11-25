@@ -98,8 +98,9 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 /// the traits of `sotu::awaitable` in place of those of `sotu::blocking`, awaits
 /// its `async` handlers, actions and hooks, and calls its plain ones directly.
 /// Hooks defined elsewhere are not inspected, so a machine whose only `async`
-/// items are such hooks must declare `awaitable`. An awaitable machine can not
-/// mount submachines.
+/// items are such hooks must declare `awaitable`. An awaitable machine can mount
+/// submachines of either mode, and a blocking machine can mount blocking
+/// submachines only.
 ///
 /// A handler takes an optional receiver, which is the shared storage, an
 /// optional event input and an optional context input. Inputs are classified
