@@ -733,6 +733,46 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
         #superstate_trait::call_exit_action(superstate, shared_storage, context)
     });
 
+    let machine_trait = quote!(<#machine as #module::IntoStateMachine>);
+
+    let before_dispatch = ready(quote! {
+        #machine_trait::before_dispatch(shared_storage, node, event, context)
+    });
+
+    let after_dispatch = ready(quote! {
+        #machine_trait::after_dispatch(shared_storage, node, event, context)
+    });
+
+    let before_transition = ready(quote! {
+        #machine_trait::before_transition(shared_storage, source, target, context)
+    });
+
+    let after_transition = ready(quote! {
+        #machine_trait::after_transition(shared_storage, source, target, context)
+    });
+
+    let before_internal_transition = ready(quote! {
+        #state_trait::__before_internal_transition(
+            source,
+            target,
+            exit_levels,
+            nesting,
+            shared_storage,
+            context,
+        )
+    });
+
+    let after_internal_transition = ready(quote! {
+        #state_trait::__after_internal_transition(
+            source,
+            target,
+            exit_levels,
+            nesting,
+            shared_storage,
+            context,
+        )
+    });
+
     quote! {
         fn state_superstate<'sub>(
             state: &'sub mut #state,
@@ -836,6 +876,78 @@ fn awaitable_boundary_methods(ir: &Ir) -> TokenStream {
             Self: 'sub,
         {
             #exit_superstate
+        }
+
+        fn before_dispatch<'ctx, 'data: 'ctx, 'sub>(
+            shared_storage: &mut Self,
+            node: ::sotu::StateOrSuperstate<'_, #state, #superstate_sub>,
+            event: &#event,
+            context: &mut #context,
+        ) -> #unit_future
+        where
+            Self: 'sub,
+        {
+            #before_dispatch
+        }
+
+        fn after_dispatch<'ctx, 'data: 'ctx, 'sub>(
+            shared_storage: &mut Self,
+            node: ::sotu::StateOrSuperstate<'_, #state, #superstate_sub>,
+            event: &#event,
+            context: &mut #context,
+        ) -> #unit_future
+        where
+            Self: 'sub,
+        {
+            #after_dispatch
+        }
+
+        fn before_transition<'ctx, 'data: 'ctx>(
+            shared_storage: &mut Self,
+            source: &#state,
+            target: &#state,
+            context: &mut #context,
+        ) -> #unit_future {
+            #before_transition
+        }
+
+        fn after_transition<'ctx, 'data: 'ctx>(
+            shared_storage: &mut Self,
+            source: &#state,
+            target: &#state,
+            context: &mut #context,
+        ) -> #unit_future {
+            #after_transition
+        }
+
+        fn internal_transition_nesting(
+            source: &mut #state,
+            target: &mut #state,
+            exit_levels: usize,
+        ) -> usize {
+            #state_trait::__internal_transition_nesting(source, target, exit_levels)
+        }
+
+        fn before_internal_transition<'ctx, 'data: 'ctx>(
+            source: &mut #state,
+            target: &mut #state,
+            exit_levels: usize,
+            nesting: usize,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future {
+            #before_internal_transition
+        }
+
+        fn after_internal_transition<'ctx, 'data: 'ctx>(
+            source: &mut #state,
+            target: &mut #state,
+            exit_levels: usize,
+            nesting: usize,
+            shared_storage: &mut Self,
+            context: &mut #context,
+        ) -> #unit_future {
+            #after_internal_transition
         }
     }
 }
