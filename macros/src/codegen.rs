@@ -570,10 +570,12 @@ fn awaitable_boundary_impl(ir: &Ir) -> Option<TokenStream> {
 /// The impl calls the machine's own trait impls, so it needs the bounds of
 /// those.
 fn boundary_generics(ir: &Ir) -> Generics {
-    with_boundary_bounds(
-        &with_mount_bounds(&ir.machine.generics, &ir.mounts),
-        &ir.mounts,
-    )
+    let generics = with_mount_bounds(&ir.machine.generics, &ir.mounts, ir.mode);
+
+    match ir.mode {
+        Mode::Blocking => with_boundary_bounds(&generics, &ir.mounts),
+        Mode::Awaitable => generics,
+    }
 }
 
 /// Return `generics` with the bound that a parent needs to call each mounted
@@ -1025,15 +1027,7 @@ fn consuming_parent_body(superstate: &SuperstateIr, mounts: &[MountIr]) -> Token
         .iter()
         .map(|arm| parent_arm(name, &parents.superstate.name, arm));
 
-    let lifted = mounts.iter().map(|mount| {
-        let child = &mount.machine;
-
-        lifted_superstate_parent_arms(
-            name,
-            mount,
-            &quote!(<#child as ::sotu::private::AwaitableSubmachine>::superstate_parent),
-        )
-    });
+    let lifted = lifted_consuming_parent_arms(name, mounts);
 
     quote! {
         match superstate {
@@ -1041,6 +1035,22 @@ fn consuming_parent_body(superstate: &SuperstateIr, mounts: &[MountIr]) -> Token
             #(#lifted)*
         }
     }
+}
+
+/// Generate the arms of a consuming `superstate` for `mounts`, each of which
+/// asks the child through the awaitable boundary for the parent of the child's
+/// superstate.
+fn lifted_consuming_parent_arms(enum_name: &Ident, mounts: &[MountIr]) -> Vec<TokenStream> {
+    mounts
+        .iter()
+        .map(|mount| {
+            lifted_superstate_parent_arms(
+                enum_name,
+                mount,
+                &child_call(&mount.machine, Mode::Awaitable, ChildCall::SuperstateParent),
+            )
+        })
+        .collect()
 }
 
 // MARK: State Dispatch
@@ -1093,7 +1103,7 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> Token
     .map(|(method, actions)| {
         let mount_arms = mounts
             .iter()
-            .map(|mount| state_lifecycle_arm(name, mount, &method));
+            .map(|mount| state_lifecycle_arm(name, mount, &method, mode));
 
         lifecycle_method(
             name,
@@ -1110,18 +1120,19 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> Token
     let parents = parents.as_ref().map(|parents| {
         let lifted = mounts
             .iter()
-            .map(|mount| lifted_state_parent_arm(name, &parents.superstate.name, mount));
+            .map(|mount| lifted_state_parent_arm(name, &parents.superstate.name, mount, mode));
 
         parent_method(name, parents, lifted.collect())
     });
 
-    let same_state = (!mounts.is_empty()).then(|| state_same_state_method(name, dispatch, mounts));
+    let same_state =
+        (!mounts.is_empty()).then(|| state_same_state_method(name, dispatch, mounts, mode));
     let boundary = (!mounts.is_empty()).then(|| state_boundary_methods(dispatch, mounts));
 
     let internal_transition =
         (!mounts.is_empty()).then(|| internal_transition_methods(dispatch, mounts));
 
-    let generics = with_mount_bounds(generics, mounts);
+    let generics = with_mount_bounds(generics, mounts, mode);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
     let module = mode_module(mode);
     let output = method_output(mode, Some(&quote!(::sotu::Outcome<Self, #exit_type>)));
@@ -1164,13 +1175,18 @@ fn dispatch_impl(dispatch: &DispatchIr, mounts: &[MountIr], mode: Mode) -> Token
 /// Generate the arm of `State::superstate` for `mount`, which lifts the
 /// superstate of the child's state into the mount's superstate variant, or
 /// returns the mount node if the child's state is at the child's top level.
-fn lifted_state_parent_arm(enum_name: &Ident, superstate: &Ident, mount: &MountIr) -> TokenStream {
+fn lifted_state_parent_arm(
+    enum_name: &Ident,
+    superstate: &Ident,
+    mount: &MountIr,
+    mode: Mode,
+) -> TokenStream {
     let variant = &mount.variant;
-    let child_state = child_state_trait(&mount.machine);
+    let child_parent = child_call(&mount.machine, mode, ChildCall::StateSuperstate);
 
     quote! {
         #enum_name::#variant(state) => ::core::option::Option::Some(#superstate::#variant(
-            match #child_state::superstate(state) {
+            match #child_parent(state) {
                 ::core::option::Option::Some(superstate) => {
                     ::sotu::SubmachineNode::Inner(superstate)
                 }
@@ -1188,6 +1204,7 @@ fn state_same_state_method(
     enum_name: &Ident,
     dispatch: &DispatchIr,
     mounts: &[MountIr],
+    mode: Mode,
 ) -> TokenStream {
     let leaf_arms = dispatch.arms.iter().map(|arm| {
         let variant = &arm.pattern.variant;
@@ -1199,11 +1216,11 @@ fn state_same_state_method(
 
     let mount_arms = mounts.iter().map(|mount| {
         let variant = &mount.variant;
-        let child_state = child_state_trait(&mount.machine);
+        let child_same = child_call(&mount.machine, mode, ChildCall::StateSame);
 
         quote! {
             (#enum_name::#variant(first), #enum_name::#variant(second)) => {
-                #child_state::same_state(first, second)
+                #child_same(first, second)
             }
         }
     });
@@ -1236,19 +1253,90 @@ fn child_superstate_trait(machine: &Type) -> TokenStream {
     superstate_trait(machine, Mode::Blocking)
 }
 
+// MARK: Child Calls
+
+/// A function through which a parent calls into one of its mounted children.
+///
+/// A blocking parent calls the blocking traits of the child, and an awaitable
+/// parent calls `AwaitableSubmachine`. A call takes the same arguments in both
+/// modes, so a call site differs between them only by the `.await` that
+/// [`awaited`] returns.
+#[derive(Clone, Copy)]
+enum ChildCall {
+    /// The superstate enclosing a child state, borrowing from the state.
+    StateSuperstate,
+    /// The superstate enclosing a child superstate, which a blocking parent
+    /// borrows and an awaitable one consumes.
+    SuperstateParent,
+    StateSame,
+    SuperstateSame,
+    StateEntry,
+    StateExit,
+    SuperstateEntry,
+    SuperstateExit,
+}
+
+/// Return the path of the function that `call` names for the child `machine`
+/// in a parent of `mode`.
+fn child_call(machine: &Type, mode: Mode, call: ChildCall) -> TokenStream {
+    let state_trait = state_trait(machine, Mode::Blocking);
+    let superstate_trait = superstate_trait(machine, Mode::Blocking);
+
+    let (blocking, awaitable) = match call {
+        ChildCall::StateSuperstate => (quote!(#state_trait::superstate), "state_superstate"),
+        ChildCall::SuperstateParent => (quote!(#superstate_trait::superstate), "superstate_parent"),
+        ChildCall::StateSame => (quote!(#state_trait::same_state), "state_same"),
+        ChildCall::SuperstateSame => (quote!(#superstate_trait::same_state), "superstate_same"),
+        ChildCall::StateEntry => (quote!(#state_trait::call_entry_action), "enter_state"),
+        ChildCall::StateExit => (quote!(#state_trait::call_exit_action), "exit_state"),
+        ChildCall::SuperstateEntry => (
+            quote!(#superstate_trait::call_entry_action),
+            "enter_superstate",
+        ),
+        ChildCall::SuperstateExit => (
+            quote!(#superstate_trait::call_exit_action),
+            "exit_superstate",
+        ),
+    };
+
+    match mode {
+        Mode::Blocking => blocking,
+        Mode::Awaitable => awaitable_call(machine, awaitable),
+    }
+}
+
+/// Return the path of the function `name` of `AwaitableSubmachine` for the
+/// child `machine`.
+fn awaitable_call(machine: &Type, name: &str) -> TokenStream {
+    let name = format_ident!("{name}");
+
+    quote!(<#machine as ::sotu::private::AwaitableSubmachine>::#name)
+}
+
+/// Return the `.await` that follows a call into a child in an awaitable
+/// parent, or nothing in a blocking one.
+fn awaited(mode: Mode) -> Option<TokenStream> {
+    (mode == Mode::Awaitable).then(|| quote!(.await))
+}
+
 /// Return `generics` with the bounds that every mounted machine must satisfy.
 ///
 /// Each bound is spanned at the value of the `machine` key, so a child that
 /// does not satisfy it is reported there.
-fn with_mount_bounds(generics: &Generics, mounts: &[MountIr]) -> Generics {
+fn with_mount_bounds(generics: &Generics, mounts: &[MountIr], mode: Mode) -> Generics {
     let mut generics = generics.clone();
 
     for mount in mounts {
         let machine = &mount.machine;
         let predicates = &mut generics.make_where_clause().predicates;
 
-        predicates.push(parse_quote_spanned! {machine.span()=>
-            #machine: ::sotu::private::BlockingSubmachine
+        predicates.push(match mode {
+            Mode::Blocking => parse_quote_spanned! {machine.span()=>
+                #machine: ::sotu::private::BlockingSubmachine
+            },
+            Mode::Awaitable => parse_quote_spanned! {machine.span()=>
+                #machine: ::sotu::private::AwaitableSubmachine
+            },
         });
 
         // Without an exit handler, the parent has nowhere to route an exit of
@@ -1302,7 +1390,7 @@ fn superstate_dispatch_impl(
         generics.params.insert(0, parse_quote!('sub));
     }
 
-    let generics = with_mount_bounds(&generics, mounts);
+    let generics = with_mount_bounds(&generics, mounts, mode);
     let (impl_generics, _, where_clause) = generics.split_for_impl();
 
     let mount_arms = mounts
@@ -1323,7 +1411,7 @@ fn superstate_dispatch_impl(
     .map(|(method, actions)| {
         let mount_arms = mounts
             .iter()
-            .map(|mount| superstate_lifecycle_arms(name, shared_storage, mount, &method));
+            .map(|mount| superstate_lifecycle_arms(name, shared_storage, mount, &method, mode));
 
         lifecycle_method(
             name,
@@ -1340,14 +1428,15 @@ fn superstate_dispatch_impl(
     let parents = match mode {
         Mode::Blocking => {
             let lifted = mounts.iter().map(|mount| {
-                let child_superstate = child_superstate_trait(&mount.machine);
+                let child_parent =
+                    child_call(&mount.machine, Mode::Blocking, ChildCall::SuperstateParent);
 
-                lifted_superstate_parent_arms(name, mount, &quote!(#child_superstate::superstate))
+                lifted_superstate_parent_arms(name, mount, &child_parent)
             });
 
             parent_method(name, parents, lifted.collect())
         }
-        Mode::Awaitable => consuming_parent_method(name, parents),
+        Mode::Awaitable => consuming_parent_method(name, parents, mounts),
     };
 
     let same_variant_arms = variants.iter().map(|variant| {
@@ -1360,7 +1449,7 @@ fn superstate_dispatch_impl(
 
     let same_mount_arms = mounts
         .iter()
-        .map(|mount| superstate_same_mount_arms(name, mount));
+        .map(|mount| superstate_same_mount_arms(name, mount, mode));
 
     // With a single variant the pairs above are exhaustive, and a wildcard arm
     // would be reported as unreachable in the user's crate. A mount variant
@@ -1504,9 +1593,9 @@ fn lifted_superstate_parent_arms(
 ///
 /// The mount node is the same node as itself, and two superstates of the child
 /// are the same node exactly when the child says so.
-fn superstate_same_mount_arms(enum_name: &Ident, mount: &MountIr) -> TokenStream {
+fn superstate_same_mount_arms(enum_name: &Ident, mount: &MountIr, mode: Mode) -> TokenStream {
     let variant = &mount.variant;
-    let child_superstate = child_superstate_trait(&mount.machine);
+    let child_same = child_call(&mount.machine, mode, ChildCall::SuperstateSame);
 
     quote! {
         (
@@ -1516,7 +1605,7 @@ fn superstate_same_mount_arms(enum_name: &Ident, mount: &MountIr) -> TokenStream
         (
             #enum_name::#variant(::sotu::SubmachineNode::Inner(first)),
             #enum_name::#variant(::sotu::SubmachineNode::Inner(second)),
-        ) => #child_superstate::same_state(first, second),
+        ) => #child_same(first, second),
     }
 }
 
@@ -1587,17 +1676,25 @@ fn parent_method(
 /// Generate the consuming `superstate` of an awaitable superstate enum, which
 /// moves the fields that the parent borrows from `self` into the parent.
 ///
-/// Mounts are blocking only, so the enum has no mount variants to lift.
-fn consuming_parent_method(enum_name: &Ident, parents: &ParentDispatchIr) -> TokenStream {
+/// A mount variant asks the child for the parent of the child's superstate, so
+/// that the borrows of the child's superstate move into the lifted parent too.
+fn consuming_parent_method(
+    enum_name: &Ident,
+    parents: &ParentDispatchIr,
+    mounts: &[MountIr],
+) -> TokenStream {
     let arms = parents
         .arms
         .iter()
         .map(|arm| parent_arm(enum_name, &parents.superstate.name, arm));
 
+    let lifted = lifted_consuming_parent_arms(enum_name, mounts);
+
     quote! {
         fn superstate(self) -> ::core::option::Option<Self> {
             match self {
                 #(#arms)*
+                #(#lifted)*
             }
         }
     }
@@ -1728,8 +1825,7 @@ fn expression_path(ty: &Type) -> TokenStream {
 /// Otherwise it always exists, because entering and leaving a mount creates
 /// and drops the child's instance and runs the child's actions. Each of the
 /// `variants` then gets an arm from `actions`, or an empty arm if no node of
-/// the enum has an action. A machine with mounts is always blocking, so
-/// `mode` only shapes the method without them.
+/// the enum has an action. An awaitable method awaits the action of every arm.
 // Each argument comes from a different part of the lowered machine, and a
 // struct bundling them would be built at the two call sites alone.
 #[allow(clippy::too_many_arguments)]
@@ -1772,25 +1868,46 @@ fn lifecycle_method(
             .collect(),
     };
 
+    let output = method_output(mode, None);
+
+    let body = method_body(
+        mode,
+        quote! {
+            match self {
+                #(#arms)*
+                #(#mount_arms)*
+            }
+        },
+    );
+
     Some(quote! {
         fn #method<'ctx, 'data: 'ctx>(
             &mut self,
             #shared_storage_parameter: &mut #shared_storage,
             #context_parameter: &mut #context_type,
-        ) {
-            match self {
-                #(#arms)*
-                #(#mount_arms)*
-            }
+        ) #output {
+            #body
         }
     })
 }
 
 /// Generate the arm of the state action `method` for `mount`, which runs the
 /// same action of the child's state on the child's storage.
-fn state_lifecycle_arm(enum_name: &Ident, mount: &MountIr, method: &Ident) -> TokenStream {
+fn state_lifecycle_arm(
+    enum_name: &Ident,
+    mount: &MountIr,
+    method: &Ident,
+    mode: Mode,
+) -> TokenStream {
     let variant = &mount.variant;
-    let child_action = child_action(mount, &child_state_trait(&mount.machine), method);
+
+    let call = if method == "call_entry_action" {
+        ChildCall::StateEntry
+    } else {
+        ChildCall::StateExit
+    };
+
+    let child_action = child_action(mount, call, mode);
 
     quote! {
         #enum_name::#variant(state) => #child_action,
@@ -1812,6 +1929,7 @@ fn superstate_lifecycle_arms(
     shared_storage: &Type,
     mount: &MountIr,
     method: &Ident,
+    mode: Mode,
 ) -> TokenStream {
     let variant = &mount.variant;
 
@@ -1851,7 +1969,13 @@ fn superstate_lifecycle_arms(
         None => instance,
     };
 
-    let child_action = child_action(mount, &child_superstate_trait(&mount.machine), method);
+    let call = if is_entry {
+        ChildCall::SuperstateEntry
+    } else {
+        ChildCall::SuperstateExit
+    };
+
+    let child_action = child_action(mount, call, mode);
 
     quote! {
         #enum_name::#variant(::sotu::SubmachineNode::Mount) => #mount_node,
@@ -1923,18 +2047,20 @@ fn factory_path(shared_storage: &Type, factory: &Path) -> TokenStream {
     }
 }
 
-/// Generate the call of the child's action `method` through `child_trait` on
-/// the node bound as `state`, with the child's storage and context.
+/// Generate the call of the child's entry or exit action `action` on the node
+/// bound as `state`, with the child's storage and context.
 ///
 /// The storage is absent only when user code emptied an active instance
 /// field, and the action is then skipped.
-fn child_action(mount: &MountIr, child_trait: &TokenStream, method: &Ident) -> TokenStream {
+fn child_action(mount: &MountIr, action: ChildCall, mode: Mode) -> TokenStream {
     let submachine = generated_ident("submachine");
     let storage = field_call(mount, "MountField", "get_mut");
+    let action = child_call(&mount.machine, mode, action);
+    let awaited = awaited(mode);
 
     let call = child_context_call(
         mount,
-        |context| quote!(#child_trait::#method(state, #submachine, #context)),
+        |context| quote!(#action(state, #submachine, #context)#awaited),
     );
 
     quote! {
