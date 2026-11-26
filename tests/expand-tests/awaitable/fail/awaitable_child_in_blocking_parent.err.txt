@@ -794,4 +794,4 @@ note: method defined here
 
 Some errors have detailed explanations: E0277, E0308.
 For more information about an error, try `rustc --explain E0277`.
-error: could not compile `<CRATE>` (bin "<BIN>") due to 41 previous errors
+error: could not compile `<CRATE>` (bin "<BIN>") due to <N> previous errors
