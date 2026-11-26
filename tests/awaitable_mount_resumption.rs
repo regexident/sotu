@@ -76,6 +76,12 @@ mod events {
     pub struct Leave;
 
     #[derive(Clone, Copy)]
+    pub struct Start;
+
+    #[derive(Clone, Copy)]
+    pub struct Restart;
+
+    #[derive(Clone, Copy)]
     pub struct Close;
 
     #[derive(Clone, Copy)]
@@ -126,22 +132,88 @@ mod door {
     }
 }
 
+mod line {
+    use sotu::prelude::*;
+
+    use super::events::{Close, Finished};
+    use super::probe::{create, step};
+    use super::{door, trace};
+
+    pub struct Line {
+        pub door: Option<door::Door>,
+    }
+
+    impl Drop for Line {
+        fn drop(&mut self) {
+            trace::record("line dropped");
+        }
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Close(Close),
+    }
+
+    #[state_machine(initial = Superstate::gate(), exit = Finished, awaitable)]
+    impl Line {
+        #[submachine(
+            machine = door::Door,
+            field = door,
+            factory = Self::make_door,
+            entry_action = enter_gate,
+            exit_action = exit_gate,
+            exit_handler = door_exited
+        )]
+        fn gate(event: &Event) -> Outcome<State, Finished> {
+            match event {
+                Event::Close(_) => Super,
+            }
+        }
+
+        #[exit_handler]
+        fn door_exited(exit: Finished) -> Outcome<State, Finished> {
+            let Finished = exit;
+
+            Exit(Finished)
+        }
+
+        #[action]
+        async fn enter_gate() {
+            step("line entered gate").await;
+        }
+
+        #[action]
+        async fn exit_gate() {
+            step("line exited gate").await;
+        }
+
+        fn make_door(&mut self, _context: &mut ()) -> door::Door {
+            create("door created");
+
+            door::Door
+        }
+    }
+}
+
 mod plant {
     use sotu::prelude::*;
 
-    use super::door;
-    use super::events::{Close, Enter, Finished, Ignore, Leave};
+    use super::events::{Close, Enter, Finished, Ignore, Leave, Restart, Start};
     use super::probe::{create, step};
+    use super::{door, line};
 
     #[derive(Default)]
     pub struct Plant {
         pub door: Option<door::Door>,
+        pub line: Option<line::Line>,
     }
 
     #[derive(Clone, Copy, Event)]
     pub enum Event {
         Enter(Enter),
         Leave(Leave),
+        Start(Start),
+        Restart(Restart),
         Close(Close),
         Ignore(Ignore),
     }
@@ -166,6 +238,7 @@ mod plant {
         fn idle(event: &Event) -> Outcome<State, Finished> {
             match event {
                 Event::Enter(_) => Transition(Superstate::gate()),
+                Event::Start(_) => Transition(Superstate::lining()),
                 _ => Handled,
             }
         }
@@ -185,11 +258,33 @@ mod plant {
             }
         }
 
+        #[submachine(
+            machine = line::Line,
+            field = line,
+            factory = Self::make_line,
+            entry_action = enter_lining,
+            exit_action = exit_lining,
+            exit_handler = line_exited
+        )]
+        fn lining(event: &Event) -> Outcome<State, Finished> {
+            match event {
+                Event::Restart(_) => ExternalTransition(Superstate::lining()),
+                _ => Handled,
+            }
+        }
+
         #[exit_handler]
         fn door_exited(exit: Finished) -> Outcome<State, Finished> {
             let Finished = exit;
 
             Transition(State::idle())
+        }
+
+        #[exit_handler]
+        fn line_exited(exit: Finished) -> Outcome<State, Finished> {
+            let Finished = exit;
+
+            Exit(Finished)
         }
 
         #[action]
@@ -212,10 +307,26 @@ mod plant {
             step("plant exited gate").await;
         }
 
+        #[action]
+        async fn enter_lining() {
+            step("plant entered lining").await;
+        }
+
+        #[action]
+        async fn exit_lining() {
+            step("plant exited lining").await;
+        }
+
         fn make_door(&mut self, _context: &mut ()) -> door::Door {
             create("door created");
 
             door::Door
+        }
+
+        fn make_line(&mut self, _context: &mut ()) -> line::Line {
+            create("line created");
+
+            line::Line { door: None }
         }
     }
 }
@@ -231,6 +342,8 @@ struct Observation {
     factory_calls: u32,
     location: &'static str,
     door_mounted: bool,
+    line_mounted: bool,
+    line_door_mounted: bool,
     terminated: bool,
 }
 
@@ -257,6 +370,7 @@ fn observe(machine: &StateMachine<plant::Plant>) -> Observation {
     let location = match machine.state() {
         plant::State::Idle {} => "idle",
         plant::State::Gate(_) => "gate",
+        plant::State::Lining(_) => "lining",
     };
 
     Observation {
@@ -265,6 +379,11 @@ fn observe(machine: &StateMachine<plant::Plant>) -> Observation {
         factory_calls: probe::factory_calls(),
         location,
         door_mounted: machine.door.is_some(),
+        line_mounted: machine.line.is_some(),
+        line_door_mounted: machine
+            .line
+            .as_ref()
+            .is_some_and(|line| line.door.is_some()),
         terminated: machine.is_terminated(),
     }
 }
@@ -297,6 +416,8 @@ fn check_interrupted_handle(
         prop_assert_eq!(untouched.factory_calls, 0);
         prop_assert_eq!(untouched.location, before.location);
         prop_assert_eq!(untouched.door_mounted, before.door_mounted);
+        prop_assert_eq!(untouched.line_mounted, before.line_mounted);
+        prop_assert_eq!(untouched.line_door_mounted, before.line_door_mounted);
         prop_assert_eq!(untouched.terminated, before.terminated);
 
         return Ok(());
@@ -315,6 +436,8 @@ fn check_interrupted_handle(
     prop_assert_eq!(actual.factory_calls, expected.factory_calls);
     prop_assert_eq!(actual.location, expected.location);
     prop_assert_eq!(actual.door_mounted, expected.door_mounted);
+    prop_assert_eq!(actual.line_mounted, expected.line_mounted);
+    prop_assert_eq!(actual.line_door_mounted, expected.line_door_mounted);
     prop_assert_eq!(actual.terminated, expected.terminated);
 
     Ok(())
@@ -332,6 +455,26 @@ fn interrupted_exit_from_mount_resumes(#[strategy(0usize..40)] polls: usize) {
     check_interrupted_handle(
         &[Event::Enter(events::Enter)],
         Event::Leave(events::Leave),
+        polls,
+    )?;
+}
+
+#[proptest]
+fn interrupted_transition_across_two_mounts_resumes(#[strategy(0usize..40)] polls: usize) {
+    check_interrupted_handle(
+        &[Event::Start(events::Start)],
+        Event::Restart(events::Restart),
+        polls,
+    )?;
+}
+
+// MARK: Termination
+
+#[proptest]
+fn interrupted_termination_through_mounts_resumes(#[strategy(0usize..40)] polls: usize) {
+    check_interrupted_handle(
+        &[Event::Start(events::Start)],
+        Event::Close(events::Close),
         polls,
     )?;
 }
