@@ -96,9 +96,13 @@ mod awaitable {
 
     #[test]
     pub fn fail() {
+        // The number of errors that cargo reports for the awaitable bounds
+        // includes duplicates that rustc suppresses, and how many of those
+        // it counts differs between host platforms.
         tryexpand::expand(["tests/expand-tests/awaitable/fail/**/*.rs"])
             .args(["--features", "async"])
             .and_check()
+            .filter_stderr(r"due to \d+ previous errors", "due to <N> previous errors")
             .expect_fail();
     }
 }
