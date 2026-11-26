@@ -20,6 +20,8 @@ mod node;
 mod outcome;
 #[doc(hidden)]
 pub mod private;
+#[cfg(feature = "serde")]
+mod serde_support;
 
 pub use node::{StateOrSuperstate, SubmachineNode};
 pub use outcome::Outcome;
