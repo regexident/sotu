@@ -681,3 +681,119 @@ fn async_exit_handler_routes_child_exit() {
     assert!(matches!(machine.state(), laundry::State::Washing {}));
     assert!(machine.door.is_none());
 }
+
+// MARK: Context Mapping
+
+mod child {
+    use std::cell::Cell;
+
+    use sotu::prelude::*;
+
+    /// The context of `Child`, borrowed from the parent's context.
+    pub struct Inner<'ctx> {
+        pub mappings: &'ctx Cell<u32>,
+    }
+
+    /// A child whose `before_dispatch` hook records the mapping count it
+    /// observes and whose superstate handles the events the leaf defers.
+    #[derive(Default)]
+    pub struct Child {
+        pub counts: Vec<u32>,
+    }
+
+    pub struct Climb;
+
+    #[derive(Event)]
+    pub enum Event {
+        Climb(Climb),
+    }
+
+    #[state_machine(
+        initial = State::leaf(),
+        context = Inner<'ctx>,
+        before_dispatch = Self::before
+    )]
+    impl Child {
+        fn before(
+            &mut self,
+            _node: StateOrSuperstate<'_, State, Superstate>,
+            _event: &Event,
+            context: &mut Inner<'_>,
+        ) {
+            self.counts.push(context.mappings.get());
+        }
+
+        #[state(superstate = group)]
+        fn leaf(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Climb(_) => Super,
+            }
+        }
+
+        #[superstate]
+        fn group() -> Outcome<State> {
+            Handled
+        }
+    }
+}
+
+mod parent {
+    use std::cell::Cell;
+
+    use sotu::prelude::*;
+
+    use super::child;
+
+    /// The context of `Parent`, from which each child callback borrows.
+    pub struct Outer {
+        pub mappings: Cell<u32>,
+    }
+
+    /// Build the child's context from `outer`, counting the calls.
+    pub fn map_context(outer: &mut Outer) -> child::Inner<'_> {
+        outer.mappings.set(outer.mappings.get() + 1);
+
+        child::Inner {
+            mappings: &outer.mappings,
+        }
+    }
+
+    /// A parent that starts inside its mount.
+    #[derive(Default)]
+    pub struct Parent {
+        pub child: child::Child,
+    }
+
+    #[derive(Event)]
+    pub enum Event {
+        Climb(child::Climb),
+    }
+
+    #[state_machine(initial = Superstate::reading(), context = Outer, awaitable)]
+    impl Parent {
+        #[submachine(machine = child::Child, field = child, context = map_context)]
+        fn reading(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Climb(_) => Handled,
+            }
+        }
+    }
+}
+
+#[test]
+fn context_mapping_runs_once_per_child_callback_in_awaitable_parent() {
+    let mut context = parent::Outer {
+        mappings: std::cell::Cell::new(0),
+    };
+
+    let mut machine = parent::Parent::default().state_machine();
+
+    block_on(machine.init(&mut context));
+    context.mappings.set(0);
+    machine.inner_mut().child.counts.clear();
+
+    block_on(machine.handle(child::Climb, &mut context));
+
+    assert_eq!(context.mappings.get(), 6);
+    assert_eq!(machine.child.counts, [1, 4]);
+}
