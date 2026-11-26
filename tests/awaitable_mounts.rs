@@ -515,3 +515,169 @@ fn hooks_nest_across_awaitable_boundary() {
         root::State::Mount(middle::State::Nesting(leaf::State::Active {}))
     ));
 }
+
+// MARK: Instances
+
+mod tracked_door {
+    use sotu::prelude::*;
+
+    use super::trace;
+
+    /// A child that records its creation and its drop.
+    pub struct Door;
+
+    impl Default for Door {
+        fn default() -> Self {
+            trace::record("door created");
+
+            Self
+        }
+    }
+
+    impl Drop for Door {
+        fn drop(&mut self) {
+            trace::record("door dropped");
+        }
+    }
+
+    pub struct Close;
+
+    #[derive(Event)]
+    pub enum Event {
+        Close(Close),
+    }
+
+    pub enum DoorExit {
+        Closed,
+    }
+
+    #[state_machine(initial = State::opened(), exit = DoorExit)]
+    impl Door {
+        #[state(entry_action = enter_opened, exit_action = exit_opened)]
+        fn opened(event: &Event) -> Outcome<State, DoorExit> {
+            match event {
+                Event::Close(_) => Exit(DoorExit::Closed),
+            }
+        }
+
+        #[action]
+        fn enter_opened() {
+            trace::record("enter opened");
+        }
+
+        #[action]
+        fn exit_opened() {
+            trace::record("exit opened");
+        }
+    }
+}
+
+mod laundry {
+    use sotu::prelude::*;
+
+    use super::common::pending_once::pending_once;
+    use super::{trace, tracked_door};
+
+    #[derive(Default)]
+    pub struct Laundry {
+        pub door: Option<tracked_door::Door>,
+    }
+
+    pub struct Start;
+
+    pub struct Leave;
+
+    #[derive(Event)]
+    pub enum Event {
+        Start(Start),
+        Leave(Leave),
+        Close(tracked_door::Close),
+    }
+
+    #[state_machine(initial = State::idle())]
+    impl Laundry {
+        #[state]
+        fn idle(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Start(_) => Transition(Superstate::loading()),
+                _ => Handled,
+            }
+        }
+
+        #[submachine(
+            machine = tracked_door::Door,
+            field = door,
+            exit_handler = door_exited
+        )]
+        fn loading(event: &Event) -> Outcome<State> {
+            match event {
+                Event::Leave(_) => Transition(State::idle()),
+                _ => Handled,
+            }
+        }
+
+        #[exit_handler]
+        async fn door_exited(&self, exit: tracked_door::DoorExit) -> Outcome<State> {
+            pending_once().await;
+
+            match exit {
+                tracked_door::DoorExit::Closed => Transition(State::washing()),
+            }
+        }
+
+        #[state(entry_action = enter_washing)]
+        fn washing() -> Outcome<State> {
+            Super
+        }
+
+        #[action]
+        fn enter_washing() {
+            trace::record("enter washing");
+        }
+    }
+}
+
+#[test]
+fn instances_follow_mount_lifetime_in_awaitable_parent() {
+    let mut machine = laundry::Laundry::default().state_machine();
+
+    block_on(machine.init(&mut ()));
+
+    assert!(machine.door.is_none());
+    assert!(trace::take().is_empty());
+
+    block_on(machine.handle(laundry::Start, &mut ()));
+
+    assert!(machine.door.is_some());
+    assert_eq!(trace::take(), ["door created", "enter opened"]);
+
+    block_on(machine.handle(laundry::Leave, &mut ()));
+
+    assert!(machine.door.is_none());
+    assert_eq!(trace::take(), ["exit opened", "door dropped"]);
+
+    block_on(machine.handle(laundry::Start, &mut ()));
+
+    assert!(machine.door.is_some());
+    assert_eq!(trace::take(), ["door created", "enter opened"]);
+}
+
+// MARK: Exit Handlers
+
+#[test]
+fn async_exit_handler_routes_child_exit() {
+    let mut machine = laundry::Laundry::default().state_machine();
+
+    block_on(machine.init(&mut ()));
+    block_on(machine.handle(laundry::Start, &mut ()));
+    trace::take();
+
+    block_on(machine.handle(tracked_door::Close, &mut ()));
+
+    assert_eq!(
+        trace::take(),
+        ["exit opened", "door dropped", "enter washing"]
+    );
+    assert!(matches!(machine.state(), laundry::State::Washing {}));
+    assert!(machine.door.is_none());
+}
