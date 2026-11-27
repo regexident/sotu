@@ -86,6 +86,19 @@ mod action {
     }
 }
 
+mod serde {
+    #[test]
+    pub fn pass() {
+        // The expansion crate sees only the regular dependencies, which do not
+        // enable the derive macros of `serde`. Their expansions name a private
+        // module of `serde` that carries its release number.
+        tryexpand::expand(["tests/expand-tests/serde/pass/**/*.rs"])
+            .args(["--features", "serde,serde/derive"])
+            .filter_stdout(r"__private\d+", "__private")
+            .and_check();
+    }
+}
+
 mod awaitable {
     #[test]
     pub fn pass() {
