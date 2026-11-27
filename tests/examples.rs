@@ -75,3 +75,16 @@ fn composition_prints_states() {
          cycles: 1\n"
     );
 }
+
+#[test]
+fn history_prints_resumed_states() {
+    assert_eq!(
+        run_example("history", &[]),
+        "Washing\n\
+         DoorOpen\n\
+         Washing\n\
+         Idle\n\
+         DoorOpen\n\
+         Idle\n"
+    );
+}
