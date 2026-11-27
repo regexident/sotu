@@ -49,6 +49,21 @@ pub struct UninitializedStateMachine<M: IntoStateMachine> {
 }
 
 impl<M: IntoStateMachine> UninitializedStateMachine<M> {
+    /// Assemble a machine from recorded parts without running any action.
+    ///
+    /// The parts are not checked against each other, so the machine is only as
+    /// consistent as its source.
+    #[cfg(feature = "serde")]
+    pub(crate) fn from_parts(shared_storage: M, state: M::State, exit: Option<M::Exit>) -> Self {
+        Self {
+            inner: Inner {
+                shared_storage,
+                state,
+                exit,
+            },
+        }
+    }
+
     /// Borrow the shared storage, the leaf state and the recorded exit value.
     #[cfg(feature = "serde")]
     pub(crate) fn parts(&self) -> (&M, &M::State, Option<&M::Exit>) {
@@ -435,6 +450,22 @@ pub struct StateMachine<M: IntoStateMachine> {
 }
 
 impl<M: IntoStateMachine> StateMachine<M> {
+    /// Assemble a machine that has not run any action from recorded parts.
+    ///
+    /// The parts are not checked against each other, so the machine is only as
+    /// consistent as its source.
+    #[cfg(feature = "serde")]
+    pub(crate) fn from_parts(shared_storage: M, state: M::State, exit: Option<M::Exit>) -> Self {
+        Self {
+            inner: Inner {
+                shared_storage,
+                state,
+                exit,
+            },
+            initialized: false,
+        }
+    }
+
     /// Borrow the shared storage, the leaf state and the recorded exit value.
     #[cfg(feature = "serde")]
     pub(crate) fn parts(&self) -> (&M, &M::State, Option<&M::Exit>) {
