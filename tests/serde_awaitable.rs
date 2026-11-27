@@ -5,8 +5,10 @@ mod common;
 use common::interrupt::poll_then_drop;
 use common::trace;
 use futures::executor::block_on;
-use lamp::{Brighten, Lamp};
-use sotu::awaitable::{InitializedStateMachine, IntoStateMachineExt};
+use lamp::{Brighten, Lamp, State};
+use sotu::awaitable::{
+    InitializedStateMachine, IntoStateMachineExt, StateMachine, UninitializedStateMachine,
+};
 
 // Every action of the fixture suspends once before it records itself, so a
 // future that is polled a fixed number of times is dropped at a known await
@@ -121,6 +123,47 @@ fn pending_progress_is_not_serialized() -> Result<(), serde_json::Error> {
     keys.sort_unstable();
 
     assert_eq!(keys, ["exit", "shared_storage", "state"]);
+
+    Ok(())
+}
+
+#[test]
+fn awaitable_round_trip_initializes_deserialized_state() -> Result<(), serde_json::Error> {
+    let mut machine = initialized_lamp();
+
+    machine.inner_mut().watts = 40;
+
+    block_on(machine.handle(Brighten, &mut ()));
+
+    assert_eq!(machine.state(), &State::Bright {});
+
+    trace::take();
+
+    let serialized = serde_json::to_string(&machine)?;
+
+    assert_eq!(
+        serialized,
+        r#"{"shared_storage":{"watts":40},"state":{"Bright":{}},"exit":null}"#
+    );
+
+    let uninitialized: UninitializedStateMachine<Lamp> = serde_json::from_str(&serialized)?;
+    let mut lazy: StateMachine<Lamp> = serde_json::from_str(&serialized)?;
+
+    assert!(trace::take().is_empty());
+    assert_eq!(uninitialized.state(), &State::Bright {});
+    assert_eq!(uninitialized.watts, 40);
+
+    let initialized = block_on(uninitialized.init(&mut ()));
+
+    assert_eq!(trace::take(), ["enter powered", "enter bright"]);
+    assert_eq!(initialized.state(), &State::Bright {});
+    assert_eq!(initialized.exit(), None);
+
+    block_on(lazy.init(&mut ()));
+
+    assert_eq!(trace::take(), ["enter powered", "enter bright"]);
+    assert_eq!(lazy.state(), &State::Bright {});
+    assert_eq!(lazy.watts, 40);
 
     Ok(())
 }

@@ -6,7 +6,9 @@
 //! machines is part of `shared_storage`, because it lives in fields of the
 //! parent's storage. Handlers, hooks and the lazy initialization flag are not
 //! serialized. Neither is the progress that an awaitable machine records for an
-//! interrupted initialization, transition or termination.
+//! interrupted initialization, transition or termination: a deserialized
+//! awaitable machine starts without any, and its state is the one the machine
+//! held when it was serialized.
 //!
 //! [`UninitializedStateMachine`] and [`StateMachine`] implement `Deserialize`,
 //! and both come back uninitialized, because the entry actions that built the
@@ -287,6 +289,34 @@ where
 impl<'de, M> Deserialize<'de> for StateMachine<M>
 where
     M: IntoStateMachine + Deserialize<'de>,
+    M::State: Deserialize<'de>,
+    M::Exit: Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (shared_storage, state, exit) = deserialize_parts(deserializer)?;
+
+        Ok(Self::from_parts(shared_storage, state, exit))
+    }
+}
+
+#[cfg(feature = "async")]
+impl<'de, M> Deserialize<'de> for awaitable::UninitializedStateMachine<M>
+where
+    M: awaitable::IntoStateMachine + Deserialize<'de>,
+    M::State: Deserialize<'de>,
+    M::Exit: Deserialize<'de>,
+{
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (shared_storage, state, exit) = deserialize_parts(deserializer)?;
+
+        Ok(Self::from_parts(shared_storage, state, exit))
+    }
+}
+
+#[cfg(feature = "async")]
+impl<'de, M> Deserialize<'de> for awaitable::StateMachine<M>
+where
+    M: awaitable::IntoStateMachine + Deserialize<'de>,
     M::State: Deserialize<'de>,
     M::Exit: Deserialize<'de>,
 {

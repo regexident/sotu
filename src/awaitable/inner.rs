@@ -75,6 +75,22 @@ impl<M: IntoStateMachine> Inner<M> {
         }
     }
 
+    /// Assemble a machine from recorded parts that has run no action and has
+    /// no pending work.
+    ///
+    /// The parts are not checked against each other, so the machine is only as
+    /// consistent as its source.
+    #[cfg(feature = "serde")]
+    pub(crate) fn from_parts(shared_storage: M, state: M::State, exit: Option<M::Exit>) -> Self {
+        Self {
+            shared_storage,
+            state,
+            exit,
+            source: None,
+            pending: None,
+        }
+    }
+
     /// Complete any pending work, then await the entry actions of every level
     /// of the active leaf, outermost first.
     ///
