@@ -5,7 +5,7 @@ mod common;
 
 use common::trace;
 use sotu::prelude::*;
-use washer::{Start, Washer};
+use washer::{Start, State, Washer};
 
 mod door {
     use serde::{Deserialize, Serialize};
@@ -171,3 +171,27 @@ fn serialized_machine_has_three_fields() -> Result<(), serde_json::Error> {
 
     Ok(())
 }
+
+#[test]
+fn round_trip_keeps_mounted_instance() -> Result<(), serde_json::Error> {
+    let mut machine = Washer::default().state_machine();
+
+    machine.handle(Start, &mut ());
+
+    machine
+        .inner_mut()
+        .door
+        .as_mut()
+        .expect("entering the mount creates the instance")
+        .openings = 4;
+
+    let restored: StateMachine<Washer> = serde_json::from_str(&serde_json::to_string(&machine)?)?;
+
+    assert_eq!(restored.door.as_ref().map(|door| door.openings), Some(4));
+    assert_eq!(restored.factory_calls, 1);
+    assert_eq!(restored.state(), machine.state());
+    assert_eq!(restored.state(), &State::Loading(door::State::Opened {}));
+
+    Ok(())
+}
+
