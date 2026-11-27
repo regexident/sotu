@@ -1,10 +1,12 @@
-//! `serde` support for the blocking state machine wrappers.
+//! `serde` support for the blocking and, with the `async` feature, the
+//! awaitable state machine wrappers.
 //!
 //! Every wrapper serializes as a struct named `StateMachine` with the fields
 //! `shared_storage`, `state` and `exit`, in that order. Storage of mounted
 //! machines is part of `shared_storage`, because it lives in fields of the
 //! parent's storage. Handlers, hooks and the lazy initialization flag are not
-//! serialized.
+//! serialized. Neither is the progress that an awaitable machine records for an
+//! interrupted initialization, transition or termination.
 //!
 //! [`UninitializedStateMachine`] and [`StateMachine`] implement `Deserialize`,
 //! and both come back uninitialized, because the entry actions that built the
@@ -26,6 +28,8 @@ use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+#[cfg(feature = "async")]
+use crate::awaitable;
 use crate::blocking::{
     InitializedStateMachine, IntoStateMachine, StateMachine, UninitializedStateMachine,
 };
@@ -86,6 +90,42 @@ where
 impl<M> Serialize for StateMachine<M>
 where
     M: IntoStateMachine + Serialize,
+    M::State: Serialize,
+    M::Exit: Serialize,
+{
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serialize_parts(serializer, self.parts())
+    }
+}
+
+#[cfg(feature = "async")]
+impl<M> Serialize for awaitable::UninitializedStateMachine<M>
+where
+    M: awaitable::IntoStateMachine + Serialize,
+    M::State: Serialize,
+    M::Exit: Serialize,
+{
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serialize_parts(serializer, self.parts())
+    }
+}
+
+#[cfg(feature = "async")]
+impl<M> Serialize for awaitable::InitializedStateMachine<M>
+where
+    M: awaitable::IntoStateMachine + Serialize,
+    M::State: Serialize,
+    M::Exit: Serialize,
+{
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serialize_parts(serializer, self.parts())
+    }
+}
+
+#[cfg(feature = "async")]
+impl<M> Serialize for awaitable::StateMachine<M>
+where
+    M: awaitable::IntoStateMachine + Serialize,
     M::State: Serialize,
     M::Exit: Serialize,
 {

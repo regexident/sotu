@@ -49,6 +49,16 @@ pub struct UninitializedStateMachine<M: IntoStateMachine> {
 }
 
 impl<M: IntoStateMachine> UninitializedStateMachine<M> {
+    /// Borrow the shared storage, the leaf state and the recorded exit value.
+    #[cfg(feature = "serde")]
+    pub(crate) fn parts(&self) -> (&M, &M::State, Option<&M::Exit>) {
+        (
+            &self.inner.shared_storage,
+            &self.inner.state,
+            self.inner.exit.as_ref(),
+        )
+    }
+
     /// Await the entry actions of every level of the initial state, outermost
     /// first, and return the running machine.
     ///
@@ -163,6 +173,18 @@ pub struct InitializedStateMachine<M: IntoStateMachine> {
 }
 
 impl<M: IntoStateMachine> InitializedStateMachine<M> {
+    /// Borrow the shared storage, the leaf state and the recorded exit value.
+    ///
+    /// Work that an interrupted call left pending is not part of the parts.
+    #[cfg(feature = "serde")]
+    pub(crate) fn parts(&self) -> (&M, &M::State, Option<&M::Exit>) {
+        (
+            &self.inner.shared_storage,
+            &self.inner.state,
+            self.inner.exit.as_ref(),
+        )
+    }
+
     /// Complete any interrupted work, then dispatch `event` along the active
     /// path and perform the resulting transition or termination.
     ///
@@ -465,6 +487,18 @@ pub struct StateMachine<M: IntoStateMachine> {
 }
 
 impl<M: IntoStateMachine> StateMachine<M> {
+    /// Borrow the shared storage, the leaf state and the recorded exit value.
+    ///
+    /// Work that an interrupted call left pending is not part of the parts.
+    #[cfg(feature = "serde")]
+    pub(crate) fn parts(&self) -> (&M, &M::State, Option<&M::Exit>) {
+        (
+            &self.inner.shared_storage,
+            &self.inner.state,
+            self.inner.exit.as_ref(),
+        )
+    }
+
     /// Await the entry actions of every level of the initial state, outermost
     /// first, unless the machine is already initialized.
     ///
