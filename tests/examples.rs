@@ -62,3 +62,16 @@ fn calculator_prints_results() {
          result: 15\n"
     );
 }
+
+#[test]
+fn composition_prints_states() {
+    assert_eq!(
+        run_example("composition", &[]),
+        "start: Loading(Opened)\n\
+         openings: 1\n\
+         close: Washing\n\
+         door present: false\n\
+         tick: Idle\n\
+         cycles: 1\n"
+    );
+}
