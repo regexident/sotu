@@ -53,3 +53,12 @@ fn blinky_prints_trace() {
          enter led_on\n"
     );
 }
+
+#[test]
+fn calculator_prints_results() {
+    assert_eq!(
+        run_example("calculator", &[]),
+        "result: 42\n\
+         result: 15\n"
+    );
+}
