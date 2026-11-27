@@ -6,6 +6,7 @@ use common::interrupt::poll_then_drop;
 use common::trace;
 use futures::executor::block_on;
 use lamp::{Brighten, Lamp, State};
+use serde_json::json;
 use sotu::awaitable::{
     InitializedStateMachine, IntoStateMachineExt, StateMachine, UninitializedStateMachine,
 };
@@ -123,6 +124,47 @@ fn pending_progress_is_not_serialized() -> Result<(), serde_json::Error> {
     keys.sort_unstable();
 
     assert_eq!(keys, ["exit", "shared_storage", "state"]);
+
+    // The first poll stops inside the exit action of `dim`, so the machine still
+    // holds `dim`. The second poll completes that exit action, swaps the state
+    // and stops inside the entry action of `bright`.
+    for (polls, held, serialized, entered) in [
+        (
+            1,
+            State::Dim {},
+            json!({ "Dim": {} }),
+            ["enter powered", "enter dim"],
+        ),
+        (
+            2,
+            State::Bright {},
+            json!({ "Bright": {} }),
+            ["enter powered", "enter bright"],
+        ),
+    ] {
+        let machine = interrupted_lamp(polls);
+
+        assert_eq!(machine.state(), &held);
+
+        let value = serde_json::to_value(&machine)?;
+
+        assert_eq!(
+            value,
+            json!({
+                "shared_storage": { "watts": 0 },
+                "state": serialized,
+                "exit": null,
+            })
+        );
+
+        trace::take();
+
+        let restored: UninitializedStateMachine<Lamp> = serde_json::from_value(value)?;
+
+        block_on(restored.init(&mut ()));
+
+        assert_eq!(trace::take(), entered);
+    }
 
     Ok(())
 }
