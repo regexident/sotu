@@ -35,23 +35,22 @@ const NAME: &str = "StateMachine";
 const FIELDS: &[&str] = &["shared_storage", "state", "exit"];
 
 /// The shared storage, the leaf state and the exit value of a machine.
-type Parts<M> = (
-    M,
-    <M as IntoStateMachine>::State,
-    Option<<M as IntoStateMachine>::Exit>,
-);
+///
+/// The blocking and the awaitable machines name the same associated types
+/// through different traits, so the helpers take them as plain parameters.
+type Parts<M, S, X> = (M, S, Option<X>);
 
 // MARK: Serialization
 
-fn serialize_parts<M, S>(
-    serializer: S,
-    (shared_storage, state, exit): (&M, &M::State, Option<&M::Exit>),
-) -> Result<S::Ok, S::Error>
+fn serialize_parts<M, S, X, Z>(
+    serializer: Z,
+    (shared_storage, state, exit): (&M, &S, Option<&X>),
+) -> Result<Z::Ok, Z::Error>
 where
-    M: IntoStateMachine + Serialize,
-    M::State: Serialize,
-    M::Exit: Serialize,
-    S: Serializer,
+    M: Serialize,
+    S: Serialize,
+    X: Serialize,
+    Z: Serializer,
 {
     let mut record = serializer.serialize_struct(NAME, FIELDS.len())?;
 
@@ -148,22 +147,25 @@ impl<'de> Deserialize<'de> for Field {
     }
 }
 
-/// Reads the three fields from a map or a sequence.
-struct PartsVisitor<M>(PhantomData<fn() -> M>);
+/// Marks a type that produces [`Parts`] without owning any of them.
+type Produces<M, S, X> = PhantomData<fn() -> Parts<M, S, X>>;
 
-impl<'de, M> Visitor<'de> for PartsVisitor<M>
+/// Reads the three fields from a map or a sequence.
+struct PartsVisitor<M, S, X>(Produces<M, S, X>);
+
+impl<'de, M, S, X> Visitor<'de> for PartsVisitor<M, S, X>
 where
-    M: IntoStateMachine + Deserialize<'de>,
-    M::State: Deserialize<'de>,
-    M::Exit: Deserialize<'de>,
+    M: Deserialize<'de>,
+    S: Deserialize<'de>,
+    X: Deserialize<'de>,
 {
-    type Value = Parts<M>;
+    type Value = Parts<M, S, X>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a state machine with the fields `shared_storage`, `state` and `exit`")
     }
 
-    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Parts<M>, A::Error> {
+    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Parts<M, S, X>, A::Error> {
         let shared_storage = sequence
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
@@ -177,10 +179,10 @@ where
         Ok((shared_storage, state, exit))
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Parts<M>, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Parts<M, S, X>, A::Error> {
         let mut shared_storage = None;
         let mut state = None;
-        let mut exit: Option<Option<M::Exit>> = None;
+        let mut exit: Option<Option<X>> = None;
 
         while let Some(field) = map.next_key()? {
             match field {
@@ -219,11 +221,11 @@ where
     }
 }
 
-fn deserialize_parts<'de, M, D>(deserializer: D) -> Result<Parts<M>, D::Error>
+fn deserialize_parts<'de, M, S, X, D>(deserializer: D) -> Result<Parts<M, S, X>, D::Error>
 where
-    M: IntoStateMachine + Deserialize<'de>,
-    M::State: Deserialize<'de>,
-    M::Exit: Deserialize<'de>,
+    M: Deserialize<'de>,
+    S: Deserialize<'de>,
+    X: Deserialize<'de>,
     D: Deserializer<'de>,
 {
     deserializer.deserialize_struct(NAME, FIELDS, PartsVisitor(PhantomData))
