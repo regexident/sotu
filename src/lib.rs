@@ -10,6 +10,7 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 #[cfg(feature = "async")]
 pub mod awaitable;
