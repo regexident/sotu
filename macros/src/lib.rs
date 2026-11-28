@@ -2,6 +2,11 @@
 //!
 //! The macros are re-exported by `sotu` behind its default `macros` feature,
 //! so most users never name this crate directly.
+//!
+//! [`state_machine`] turns an impl block of handlers into a complete state
+//! machine, and the item attributes [`state`], [`superstate`], [`submachine`],
+//! [`action`] and [`exit_handler`] mark the functions it consumes.
+//! [`derive@Event`] builds the event enum that a machine and its parents share.
 
 mod analyze;
 mod codegen;
@@ -49,76 +54,182 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 /// Generate a state machine from an impl block of state handlers.
 ///
-/// Functions marked with `#[state]` become the leaf states of the machine. Each
-/// handler produces a variant of a generated `State` enum, named with the
-/// PascalCase form of the handler name, and a constructor that keeps the
-/// handler's snake_case name. Variants keep the declaration order, and the
-/// handler's doc comments are copied to its variant. The macro also implements
-/// `sotu::blocking::IntoStateMachine` and `sotu::blocking::State`, so the storage
-/// type can be turned into a running machine.
+/// Functions marked with `#[state]` become the leaf states of the machine,
+/// functions marked with `#[superstate]` its superstates, and functions marked
+/// with `#[submachine]` the mounts of other machines. The macro implements
+/// `sotu::blocking::IntoStateMachine` for the storage type, and
+/// `sotu::blocking::State` and `sotu::blocking::Superstate` for the generated
+/// enums, or their counterparts in `sotu::awaitable`. The extension trait
+/// `IntoStateMachineExt`, which `sotu::prelude` brings into scope, then turns
+/// the storage into a running machine.
 ///
-/// Every argument takes tokens, not a string literal:
+/// Key values are written as tokens, and a value written as a string literal is
+/// rejected. Each key may appear once. Invalid keys are reported on their own
+/// as a compile error, without the impl block being examined. Once the keys
+/// parse, the errors found in the impl block are combined into one compile
+/// error, along with a missing `initial`. A function whose item attribute has
+/// invalid arguments is not classified, so its inputs are not checked.
 ///
-/// - `initial = expression` is required and builds the state the machine
-///   starts in.
-/// - `context = Type` names the context handed to every handler and action. The
-///   type may use the lifetimes `'ctx` and `'data` and any lifetime declared on
-///   the `impl` block, and becomes `type Context<'ctx, 'data: 'ctx> = Type`. It
-///   is `()` when the argument is absent. Two lifetimes are needed because
-///   `&'a mut T` is invariant in `T`: with only one, a context such as
-///   `Writer<'a>` holding `&'a mut Vec<&'a str>` could not be rebuilt for each
-///   event inside a loop.
-/// - `event_identifier = ident` renames the event input, which is `event` by
-///   default.
-/// - `context_identifier = ident` renames the context input, which is `context`
-///   by default.
-/// - `exit = Type` names the exit points through which the machine can be left,
-///   and becomes `type Exit = Type`. Handlers then return `Outcome<State, Type>`,
-///   and a handler of the root machine that returns `Exit(value)` terminates it.
-///   It is `::core::convert::Infallible` when the argument is absent.
-/// - `before_dispatch = path` and `after_dispatch = path` name functions called
-///   just before and just after each node handles an event. Such a function
-///   takes `&mut self`, the node as a `StateOrSuperstate<'_, State, Superstate>`
-///   and the event, where `Superstate` is `()` for a machine without
-///   superstates.
-/// - `before_transition = path` and `after_transition = path` name functions
-///   called just before the first exit action and just after the last entry
-///   action of a transition. Such a function takes `&mut self`, the source state
-///   and the target state.
-/// - `awaitable` is a bare flag that makes the machine awaitable.
+/// # Keys
 ///
-/// A hook function may take the context input as a trailing parameter, and the
-/// generated code passes it the context only if it does. A hook whose argument
-/// is absent keeps the no-op default of `sotu::blocking::IntoStateMachine`.
+/// | Key | Value | Default | Effect |
+/// |-----|-------|---------|--------|
+/// | `initial` | expression | none, required | Builds the state the machine starts in, such as `State::idle()`. |
+/// | `context` | type | `()` | The context handed to every handler, action and hook, which becomes `type Context<'ctx, 'data: 'ctx> = Type`. The type may use `'ctx`, `'data` and any lifetime of the impl block. |
+/// | `exit` | type | `::core::convert::Infallible` | The exit points through which the machine can be left, which becomes `type Exit = Type`. Handlers then return `Outcome<State, Type>`. |
+/// | `event_identifier` | identifier | `event` | The name of the event input of handlers. |
+/// | `context_identifier` | identifier | `context` | The name of the context input of handlers, actions and exit handlers. |
+/// | `submachine_identifier` | identifier | `submachine` | The name of the input that borrows a mounted machine's storage. |
+/// | `exit_identifier` | identifier | `exit` | The name of the input of an exit handler that receives the mounted machine's exit value. |
+/// | `before_dispatch` | path | no hook | A function called just before each node handles an event. |
+/// | `after_dispatch` | path | no hook | A function called just after each node handled an event. |
+/// | `before_transition` | path | no hook | A function called just before the first exit action of a transition. |
+/// | `after_transition` | path | no hook | A function called just after the last entry action of a transition. |
+/// | `visibility` | visibility | `pub` | The visibility of the generated enums and their constructors, such as `pub(crate)`. |
+/// | `state(...)` | list | see below | The options of the generated `State` enum. |
+/// | `superstate(...)` | list | see below | The options of the generated `Superstate` enum. |
+/// | `awaitable` | bare flag | absent | Makes the machine awaitable even if no function is an `async fn`. |
+///
+/// A dispatch hook takes `&mut self`, the node as a
+/// `StateOrSuperstate<'_, State, Superstate>` and the event by reference. A
+/// transition hook takes `&mut self`, the source state and the target state by
+/// reference. Either may take the context as a trailing parameter, and the
+/// generated code passes the context only to hooks that take it. In the node of
+/// a dispatch hook, `Superstate` is `()` for a machine with neither
+/// superstates nor mounts and carries a lifetime if its variants borrow local
+/// storage or hold a mount. A hook that is absent keeps the no-op default of
+/// the `IntoStateMachine` trait. Hooks may be methods of the impl block, named
+/// as `Self::name`, or free functions.
+///
+/// Identifier keys classify inputs by name only, so a renamed identifier
+/// replaces the default name, which then declares local storage like any other
+/// reference input.
+///
+/// The options of `state(...)` and `superstate(...)` are:
+///
+/// | Option | Applies to | Default | Effect |
+/// |--------|------------|---------|--------|
+/// | `name = Name` | both | `State` and `Superstate` | The name of the generated enum. |
+/// | `derive(Trait, ...)` | both | no derives | Traits to derive on the generated enum. |
+/// | `custom` | `state` only | absent | The impl block uses an enum that the user defines, so the macro generates no enum and no constructors. The enum needs one struct variant per state handler, named after the handler in PascalCase or by its `name` key, with fields named and typed like the handler's local storage, and one tuple variant per mount that holds the child's `State`. Cannot be combined with `derive`. |
+///
+/// # Awaitable machines
 ///
 /// The machine is awaitable when any `#[state]`, `#[superstate]` or
 /// `#[submachine]` handler, `#[action]` or `#[exit_handler]` is an `async fn`,
-/// when a hook names an `async fn` of the impl block as `name` or
-/// `Self::name`, or when `awaitable` is given. An awaitable machine implements
-/// the traits of `sotu::awaitable` in place of those of `sotu::blocking`, awaits
-/// its `async` handlers, actions and hooks, and calls its plain ones directly.
-/// Hooks defined elsewhere are not inspected, so a machine whose only `async`
-/// items are such hooks must declare `awaitable`. An awaitable machine can mount
+/// when a hook names an `async fn` of the impl block as `name` or `Self::name`,
+/// or when `awaitable` is given. An awaitable machine implements the traits of
+/// `sotu::awaitable` in place of those of `sotu::blocking`, awaits its `async`
+/// handlers, actions and hooks, and calls its plain ones directly. Hooks
+/// defined elsewhere are not inspected, so a machine whose only `async` items
+/// are such hooks must declare `awaitable`. An awaitable machine can mount
 /// submachines of either mode, and a blocking machine can mount blocking
 /// submachines only.
 ///
-/// A handler takes an optional receiver, which is the shared storage, an
-/// optional event input and an optional context input. Inputs are classified
-/// by name only, so a renamed identifier replaces the default name, which then
-/// declares local storage like any other reference input. The type behind the
-/// event reference, as in `event: &Event`, is the event type of the machine. It
-/// is `()` when no handler takes an event, which makes the machine usable
-/// through `step`. The context input has the type `&mut Ctx<'_, '_>`, where
-/// `Ctx` is the type given to `context`. State handlers, superstate handlers
-/// and actions may all take the context input, and the generated code passes
-/// them the context given to `handle`, `step` or `init`. A handler's attributes
-/// other than the ones of `sotu` stay on the function.
+/// # Handlers and their inputs
 ///
-/// Invalid arguments are reported on their own as a compile error, without the
-/// impl block being examined. Once the arguments parse, the errors found in the
-/// impl block are combined into one compile error, along with a missing
-/// `initial`. A handler with an invalid `#[state(...)]` attribute reports that
-/// attribute, and its inputs are not checked.
+/// The event type of the machine is the type behind the event reference, as in
+/// `event: &Event`. It is `()` when no handler takes an event, which makes the
+/// machine usable through `step`. The context input has the type
+/// `&mut Ctx<'_, '_>`, where `Ctx` is the type given to `context`.
+///
+/// Every handler, action and exit handler may take the context input. Two
+/// lifetimes exist because `&'a mut T` is invariant in `T`: with only one,
+/// a context such as `Writer<'a>` holding `&'a mut Vec<&'a str>` could not be
+/// rebuilt for each event inside a loop.
+///
+/// A handler may declare generics only through the impl block. Inputs are
+/// plain identifiers. The event input must be a shared reference, and every
+/// input other than the receiver, the event, the context and the exit value of
+/// an exit handler must be a reference. A handler's
+/// attributes other than the ones of `sotu` stay on the function, and its doc
+/// comments are copied to its variant.
+///
+/// # Item attributes
+///
+/// [`#[state]`](macro@state) declares a leaf state. Its inputs are an optional
+/// receiver (`&self` or `&mut self`, the shared storage), an optional event, an
+/// optional context, and any number of local storage references. A local
+/// storage input becomes a field of the state's variant and a parameter of its
+/// constructor. `#[default]` or `#[default = expression]` on such an input
+/// removes it from the constructor and fills it with `Default::default()` or
+/// the expression.
+///
+/// [`#[superstate]`](macro@superstate) declares a node that groups states and
+/// other superstates. Its inputs are the same as those of a state, except that
+/// local storage inputs are borrowed from the active leaf, so the leaves below
+/// it need fields of the same names and types. A superstate with local storage
+/// cannot contain a mount, because the leaves below a mount belong to the
+/// mounted machine and have no such fields.
+///
+/// [`#[submachine]`](macro@submachine) mounts another machine as a node. The
+/// annotated function is the mount handler, which receives the events that
+/// reach the mount node. Its inputs are an optional receiver, event and
+/// context, and optionally the `submachine` input, a reference to the child's
+/// storage. The `submachine` input and the receiver cannot be combined, because
+/// the input borrows a field of the storage that the receiver borrows whole.
+/// The same restriction applies to the actions and the exit handler of a mount
+/// that take the `submachine` input. The mount handler takes no local storage.
+///
+/// [`#[action]`](macro@action) declares an entry or exit action. Its inputs are
+/// an optional receiver, an optional context and references to the local
+/// storage of the state or superstate that names it. The actions of a mount
+/// may also take the `submachine` input.
+///
+/// [`#[exit_handler]`](macro@exit_handler) declares the function that answers
+/// the exit value of a mounted machine with an outcome of the parent. It takes
+/// the exit value by value, named by `exit_identifier`, and may take the
+/// receiver, the context and the `submachine` input.
+///
+/// The keys of the item attributes are:
+///
+/// | Attribute | Key | Default | Effect |
+/// |-----------|-----|---------|--------|
+/// | `#[state]` | `name = Name` | PascalCase of the function name | The name of the variant. The constructor is its snake_case form. |
+/// | `#[state]`, `#[superstate]`, `#[submachine]` | `superstate = handler` | top level | The `#[superstate]` or `#[submachine]` handler that encloses the node. |
+/// | `#[state]`, `#[superstate]`, `#[submachine]` | `entry_action = action` | none | The `#[action]` that runs when the node is entered. |
+/// | `#[state]`, `#[superstate]`, `#[submachine]` | `exit_action = action` | none | The `#[action]` that runs when the node is left. |
+/// | `#[state]`, `#[superstate]` | `local_storage(field: Type, ...)` | none | Extra fields of the variant that no handler input declares. A `#[superstate]` uses the listed type as written, so it must be the reference that the superstate borrows from the leaf, such as `unit: &'sub mut char` or `unit: &'sub char`. The leaf declares the plain `unit: char` field. |
+/// | `#[superstate]` | `initial = expression` | none | The state that the generated constructor `Superstate::name()` returns. |
+/// | `#[superstate]`, `#[submachine]` | `name = Name` | PascalCase of the function name | The name of the variant. |
+/// | `#[submachine]` | `machine = Type` | none, required | The type of the mounted machine. |
+/// | `#[submachine]` | `field = ident` | none, required | The field of the storage that holds the mounted machine. |
+/// | `#[submachine]` | `factory = path` | `Default::default()` | A function `fn(&mut self, &mut Context) -> Machine` that creates the machine. Only valid for an `Option<Machine>` field. |
+/// | `#[submachine]` | `context = path` | the parent's context unchanged | A function from the parent's context to the child's, called for each call into the child. `sotu::event::unit_context` maps any context to `()`. |
+/// | `#[submachine]` | `exit_handler = handler` | none | The `#[exit_handler]` that receives the child's exit values. Required when the child declares an exit type. |
+/// | `#[action]`, `#[exit_handler]` | none | | These attributes take no arguments. |
+///
+/// A mount's entry action runs after the child is created and its exit action
+/// runs before the child is released. The type of the `field` decides how the
+/// child lives. An `Option<Machine>` field is filled when the mount is entered,
+/// unless it already holds a child, and emptied when the mount is left, so the
+/// child is created and dropped with the mount. A plain `Machine` field is
+/// never created or dropped by a transition and keeps its storage while the
+/// mount is inactive.
+///
+/// # Generated items
+///
+/// - `State`, an enum with one struct variant per `#[state]` and one tuple
+///   variant per `#[submachine]`. Local storage inputs are the fields of a state
+///   variant, and the variant of a mount holds the child's `State`.
+/// - A constructor per state variant, named after the variant in snake_case,
+///   taking the fields that have no `#[default]`. A mount's constructor takes
+///   the child's state.
+/// - `Superstate`, an enum with one variant per `#[superstate]` and per
+///   `#[submachine]`. The variant of a mount holds a
+///   `sotu::SubmachineNode`, which is `Mount` for the mount node and `Inner`
+///   for a superstate of the child. The enum has a lifetime parameter if a
+///   superstate borrows local storage or the machine has a mount, and the
+///   superstate type is `()` if the machine has neither superstates nor mounts.
+/// - For each `#[superstate]` with `initial` and for each mount, a constructor
+///   `Superstate::name()` that returns the state to enter the node at. For a
+///   mount it is the child's initial state.
+/// - The trait implementations named above, and the implementations that let
+///   the machine be mounted in another machine.
+///
+/// Machines without exit points have the exit type `Infallible`, and a
+/// handler returns `Outcome<State>`. Handlers that return `Exit` at the root
+/// of a machine terminate it.
 ///
 /// # Examples
 ///
