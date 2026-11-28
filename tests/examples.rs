@@ -88,3 +88,22 @@ fn history_prints_resumed_states() {
          Idle\n"
     );
 }
+
+#[test]
+fn async_blinky_prints_trace() {
+    assert_eq!(
+        run_example("async_blinky", &["async"]),
+        "enter blinking\n\
+         enter led_on\n\
+         exit led_on\n\
+         enter led_off\n\
+         exit led_off\n\
+         enter led_on\n\
+         exit led_on\n\
+         exit blinking\n\
+         enter not_blinking\n\
+         exit not_blinking\n\
+         enter blinking\n\
+         enter led_on\n"
+    );
+}
