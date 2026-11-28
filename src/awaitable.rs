@@ -36,6 +36,60 @@
 //!
 //! [`State::superstate`] still borrows the leaf state, because the leaf
 //! outlives every superstate built from it.
+//!
+//! # Cancellation
+//!
+//! The wrappers record their progress after every completed action and hook of
+//! an initialization, a transition or a termination. If the future of `init`,
+//! `handle`, `step` or `restart` is dropped while it awaits one of them, the
+//! next of these calls completes the interrupted work first. The interrupted
+//! action or hook runs again from its start, and a completed one never runs
+//! twice. Dropping the future while a handler or a dispatch hook is awaited
+//! loses the event, because nothing is resumed for it. Progress is not part of
+//! the serialized form of a machine.
+//!
+//! # Examples
+//!
+//! The handlers of an awaitable machine are written as in the blocking mode,
+//! and a handler or action that has to wait is an `async fn`. This sensor
+//! samples a value on every tick. The tick event `()` is driven with `step`,
+//! and `futures::executor::block_on` stands in for whatever executor the
+//! application uses.
+//!
+//! ```
+//! use futures::executor::block_on;
+//! use sotu::prelude::*;
+//!
+//! struct Sensor {
+//!     samples: Vec<u32>,
+//! }
+//!
+//! /// Stand-in for a read that has to wait on hardware.
+//! async fn read() -> u32 {
+//!     core::future::ready(42).await
+//! }
+//!
+//! #[state_machine(initial = State::sampling())]
+//! impl Sensor {
+//!     #[state]
+//!     async fn sampling(&mut self) -> Outcome<State> {
+//!         let sample = read().await;
+//!
+//!         self.samples.push(sample);
+//!
+//!         Handled
+//!     }
+//! }
+//!
+//! block_on(async {
+//!     let mut machine = Sensor { samples: Vec::new() }.state_machine();
+//!
+//!     machine.step(&mut ()).await;
+//!     machine.step(&mut ()).await;
+//!
+//!     assert_eq!(machine.samples, [42, 42]);
+//! });
+//! ```
 
 mod ext;
 mod hook;

@@ -13,6 +13,84 @@
 //! The unit type `()` is the tick event. Its only projection is
 //! `(): SubEvent<()>`, and [`unit_context`] maps any parent context to the
 //! child context `()`.
+//!
+//! # Events are types
+//!
+//! A shared enum of all events would force every machine of a system to depend
+//! on one definition, and a machine in another crate could not be mounted
+//! without agreeing on that enum first. Identifying an event by its type
+//! removes the shared definition. The door crate defines `Open` and `Close`,
+//! the washer crate lists those types in its own enum, and neither needs to
+//! know the other's enum. The compiler checks the listing: a child event type
+//! that the parent's enum lacks is a compile error that names the missing
+//! type.
+//!
+//! The cost is that an event enum holds exactly one variant per type. Two
+//! variants carrying the same payload type could not be told apart, so
+//! `#[derive(Event)]` rejects them.
+//!
+//! # Deriving the projections
+//!
+//! `#[derive(Event)]` implements [`From`] for each payload type, [`Variant`]
+//! for each payload type, and [`SubEvent`] for every parent enum that lists
+//! all of the payload types. Handwriting the traits is possible, as in the
+//! examples of [`Variant`] and [`SubEvent`], but the derive is the usual way.
+//!
+//! ```
+//! use sotu::Event;
+//! use sotu::event::{SubEvent, Variant};
+//!
+//! #[derive(PartialEq, Debug)]
+//! struct Open;
+//!
+//! #[derive(PartialEq, Debug)]
+//! struct Close;
+//!
+//! #[derive(PartialEq, Debug)]
+//! struct Tick;
+//!
+//! #[derive(PartialEq, Debug, Event)]
+//! enum DoorEvent {
+//!     Open(Open),
+//!     Close(Close),
+//! }
+//!
+//! #[derive(PartialEq, Debug, Event)]
+//! enum WasherEvent {
+//!     Open(Open),
+//!     Close(Close),
+//!     Tick(Tick),
+//! }
+//!
+//! // A payload converts into its enum, which is what `handle` relies on.
+//! assert_eq!(WasherEvent::from(Tick), WasherEvent::Tick(Tick));
+//!
+//! // The parent projects the events the child lists into the child's enum.
+//! assert_eq!(
+//!     DoorEvent::project(WasherEvent::Open(Open)),
+//!     Ok(DoorEvent::Open(Open))
+//! );
+//!
+//! // Events the child does not list come back unchanged, which the mount
+//! // treats as the child deferring the event.
+//! assert!(!DoorEvent::accepts(&WasherEvent::Tick(Tick)));
+//! assert_eq!(
+//!     DoorEvent::project(WasherEvent::Tick(Tick)),
+//!     Err(WasherEvent::Tick(Tick))
+//! );
+//!
+//! // The child's events embed back into the parent's enum.
+//! assert_eq!(
+//!     <DoorEvent as SubEvent<WasherEvent>>::embed(DoorEvent::Close(Close)),
+//!     WasherEvent::Close(Close)
+//! );
+//!
+//! // `Variant` peeks at the held payload without moving it.
+//! let event = WasherEvent::Tick(Tick);
+//!
+//! assert_eq!(<WasherEvent as Variant<Tick>>::as_variant_ref(&event), Some(&Tick));
+//! assert_eq!(<WasherEvent as Variant<Open>>::as_variant_ref(&event), None);
+//! ```
 
 // MARK: Variant
 
