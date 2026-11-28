@@ -233,53 +233,103 @@ pub fn derive_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 ///
 /// # Examples
 ///
+/// A machine with a superstate, local storage, actions and a hook:
+///
 /// ```ignore
 /// use sotu::prelude::*;
 ///
 /// #[derive(Default)]
-/// struct Switch {
-///     flips: u32,
+/// struct Lamp {
+///     log: Vec<&'static str>,
+///     transitions: u32,
 /// }
 ///
-/// struct Flip;
+/// struct Toggle;
 ///
 /// #[derive(Event)]
 /// enum Event {
-///     Flip(Flip),
+///     Toggle(Toggle),
 /// }
 ///
-/// #[state_machine(initial = State::off())]
-/// impl Switch {
-///     /// The switch is off.
-///     #[state]
-///     fn off(&mut self, event: &Event) -> Outcome<State> {
+/// #[state_machine(initial = State::off(), after_transition = Self::count)]
+/// impl Lamp {
+///     #[superstate(entry_action = enter_powered, exit_action = exit_powered)]
+///     fn powered(event: &Event) -> Outcome<State> {
 ///         match event {
-///             Event::Flip(_) => {
-///                 self.flips += 1;
-///
-///                 Transition(State::on())
-///             }
+///             Event::Toggle(_) => Super,
 ///         }
 ///     }
 ///
-///     /// The switch is on.
-///     #[state]
-///     fn on(event: &Event) -> Outcome<State> {
+///     #[state(superstate = powered)]
+///     fn off(event: &Event) -> Outcome<State> {
 ///         match event {
-///             Event::Flip(_) => Transition(State::off()),
+///             Event::Toggle(_) => Transition(State::on(100)),
 ///         }
 ///     }
+///
+///     #[state(superstate = powered)]
+///     fn on(brightness: &mut u8, event: &Event) -> Outcome<State> {
+///         match event {
+///             Event::Toggle(_) => Transition(State::off()),
+///         }
+///     }
+///
+///     fn count(&mut self, _source: &State, _target: &State) {
+///         self.transitions += 1;
+///     }
+///
+///     #[action]
+///     fn enter_powered(&mut self) {
+///         self.log.push("enter powered");
+///     }
+///
+///     #[action]
+///     fn exit_powered(&mut self) {
+///         self.log.push("exit powered");
+///     }
 /// }
+/// ```
 ///
-/// let mut machine = Switch::default().state_machine();
+/// A machine that mounts another machine, with a factory and an exit handler:
 ///
-/// machine.handle(Flip, &mut ());
+/// ```ignore
+/// #[state_machine(initial = State::idle())]
+/// impl Washer {
+///     #[state]
+///     fn idle(event: &Event) -> Outcome<State> {
+///         match event {
+///             Event::Start(_) => Transition(Superstate::loading()),
+///             Event::Close(_) | Event::Tick(_) => Super,
+///         }
+///     }
 ///
-/// assert_eq!(machine.flips, 1);
+///     #[submachine(
+///         machine = door::Door,
+///         field = door,
+///         factory = Self::new_door,
+///         exit_handler = door_exited
+///     )]
+///     fn loading(event: &Event) -> Outcome<State> {
+///         match event {
+///             Event::Start(_) | Event::Close(_) | Event::Tick(_) => Super,
+///         }
+///     }
+///
+///     #[exit_handler]
+///     fn door_exited(exit: door::DoorExit) -> Outcome<State> {
+///         match exit {
+///             door::DoorExit::Closed => Transition(State::idle()),
+///         }
+///     }
+///
+///     fn new_door(&mut self, _context: &mut ()) -> door::Door {
+///         door::Door::default()
+///     }
+/// }
 /// ```
 ///
 /// Doc tests of a procedural macro crate cannot depend on `sotu`, which depends
-/// on this crate, so the example above is not compiled here.
+/// on this crate, so the examples above are not compiled here.
 #[proc_macro_attribute]
 pub fn state_machine(
     arguments: proc_macro::TokenStream,
@@ -296,9 +346,39 @@ pub fn state_machine(
 
 /// Mark a function as a state handler inside a `#[state_machine]` impl block.
 ///
+/// The handler becomes a leaf state: a variant of the generated `State` enum
+/// whose fields are the handler's local storage, and a constructor of the same
+/// name. The keys are `name`, `superstate`, `entry_action`, `exit_action` and
+/// `local_storage(field: Type, ...)`, and the inputs are an optional receiver,
+/// event and context followed by local storage references. The keys, their
+/// defaults and the inputs are described in the documentation of
+/// [`state_machine`](macro@state_machine).
+///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
 /// removes this attribute from its output. Outside such a block this attribute
 /// has no effect: it ignores its arguments and returns the item unchanged.
+///
+/// # Examples
+///
+/// This handler declares the variant `State::First { value, unit }` and the
+/// constructor `State::first(value, unit)`. The `value` field comes from the
+/// handler's input and the `unit` field from the `local_storage` key, which the
+/// handler does not take as an input:
+///
+/// ```ignore
+/// #[state(superstate = keypad, entry_action = clear_display, local_storage(unit: char))]
+/// fn first(value: &mut i64, event: &Event) -> Outcome<State> {
+///     match event {
+///         Event::Digit(Digit(digit)) => {
+///             *value = *value * 10 + i64::from(*digit);
+///
+///             Handled
+///         }
+///         Event::Clear(_) => Transition(State::first(0, ' ')),
+///         Event::Plus(_) => Super,
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn state(
     _arguments: proc_macro::TokenStream,
@@ -309,9 +389,30 @@ pub fn state(
 
 /// Mark a function as a superstate handler inside a `#[state_machine]` impl block.
 ///
+/// The handler becomes a variant of the generated `Superstate` enum. It
+/// receives the events that the states below it defer with `Super`, and its
+/// local storage inputs are borrowed from the active leaf. The keys are `name`,
+/// `superstate`, `entry_action`, `exit_action`, `initial` and
+/// `local_storage(field: Type, ...)`. With `initial = expression`, the macro
+/// generates a constructor `Superstate::name()` that returns the state to enter
+/// the superstate at. The keys, their defaults and the inputs are described in
+/// the documentation of [`state_machine`](macro@state_machine).
+///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
 /// removes this attribute from its output. Outside such a block this attribute
 /// has no effect: it ignores its arguments and returns the item unchanged.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[superstate(initial = State::idle(), entry_action = enter_powered)]
+/// fn powered(event: &Event) -> Outcome<State> {
+///     match event {
+///         Event::Reset(_) => Transition(State::idle()),
+///         Event::Press(_) => Super,
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn superstate(
     _arguments: proc_macro::TokenStream,
@@ -322,9 +423,35 @@ pub fn superstate(
 
 /// Mark an item as a mounted submachine inside a `#[state_machine]` impl block.
 ///
+/// The function is the mount handler. Its name in PascalCase, or the `name`
+/// key, is the name of the variants in both generated enums. The keys are
+/// `machine` and `field`, which are required, and `factory`, `context`, `name`,
+/// `superstate`, `entry_action`, `exit_action` and `exit_handler`. The field
+/// holds the mounted machine inside the parent's storage, as an
+/// `Option<Machine>` that is created and dropped with the mount, or as a plain
+/// `Machine` that persists.
+/// The keys, their defaults and the inputs are described in the documentation
+/// of [`state_machine`](macro@state_machine).
+///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
 /// removes this attribute from its output. Outside such a block this attribute
 /// has no effect: it ignores its arguments and returns the item unchanged.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[submachine(
+///     machine = meter::Meter,
+///     field = backup,
+///     context = sotu::event::unit_context
+/// )]
+/// fn backup(event: &Event) -> Outcome<State> {
+///     match event {
+///         Event::Close(_) => Transition(State::idle()),
+///         Event::UseLive(_) | Event::UseBackup(_) | Event::Tick(_) => Super,
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn submachine(
     _arguments: proc_macro::TokenStream,
@@ -335,9 +462,30 @@ pub fn submachine(
 
 /// Mark a function as an entry or exit action inside a `#[state_machine]` impl block.
 ///
+/// An action is attached to a node with `entry_action = name` or
+/// `exit_action = name` on `#[state]`, `#[superstate]` or `#[submachine]`. It
+/// takes no arguments itself. Its inputs are an optional receiver, an optional
+/// context, and references to the local storage of the node that names it. The
+/// actions of a mount may also take the `submachine` input. An action may be
+/// an `async fn`, which makes the machine awaitable.
+///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
 /// removes this attribute from its output. Outside such a block this attribute
 /// has no effect: it ignores its arguments and returns the item unchanged.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[state(entry_action = enter_on, local_storage(started: bool))]
+/// fn on(event: &Event) -> Outcome<State> {
+///     Handled
+/// }
+///
+/// #[action]
+/// fn enter_on(&mut self, started: &mut bool) {
+///     *started = true;
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn action(
     _arguments: proc_macro::TokenStream,
@@ -348,9 +496,28 @@ pub fn action(
 
 /// Mark a function as a submachine exit handler inside a `#[state_machine]` impl block.
 ///
+/// A mount names the exit handler with `exit_handler = name`, and the handler
+/// answers the exit values of the mounted machine with an outcome of the
+/// parent, such as a transition or the parent's own `Exit`. It takes no
+/// arguments itself. Its input of the exit value is passed by value and named
+/// `exit` unless `exit_identifier` renames it, and it may also take the
+/// receiver, the context and the `submachine` input. Several mounts may share
+/// one exit handler, and an exit handler that no mount names is an error.
+///
 /// The enclosing `#[state_machine]` attribute interprets the arguments and
 /// removes this attribute from its output. Outside such a block this attribute
 /// has no effect: it ignores its arguments and returns the item unchanged.
+///
+/// # Examples
+///
+/// ```ignore
+/// #[exit_handler]
+/// fn door_exited(exit: door::DoorExit) -> Outcome<State> {
+///     match exit {
+///         door::DoorExit::Closed => Transition(State::washing()),
+///     }
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn exit_handler(
     _arguments: proc_macro::TokenStream,
