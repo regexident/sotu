@@ -29,6 +29,11 @@ pub use outcome::Outcome;
 #[cfg(feature = "macros")]
 pub use sotu_macros::{Event, action, exit_handler, state, state_machine, submachine, superstate};
 
+// Compiles and runs the Rust samples of "README.md" as doc tests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 /// Common imports for writing state machines.
 pub mod prelude {
     #[cfg(feature = "async")]
